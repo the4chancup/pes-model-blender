@@ -5,8 +5,16 @@ import zlib
 class InvalidModel(Exception):
 	pass
 
+class FatalParserWarning(Exception):
+	pass
+
 class ExportError(Exception):
 	pass
+
+class ParserSettings:
+	def __init__(self):
+		self.ignoreParserWarnings = True
+		self.strictParsing = False
 
 class ModelFile:
 	class VertexDatumType:
@@ -137,10 +145,14 @@ class ModelFile:
 	
 	
 
-def readModelBuffer(modelBuffer):
+def readModelBuffer(modelBuffer, parserSettings):
+	warnings = []
+	
 	def parserWarning(message):
-		# TODO: Turn this into a warning
-		raise InvalidModel(f"WARNING: Unexpected .model property: {message}")
+		if parserSettings.ignoreParserWarnings:
+			warnings.append(message)
+		else:
+			raise FatalParserWarning(message)
 	
 	class BufferStream:
 		def __init__(self, buffer, offset):
@@ -418,16 +430,20 @@ def readModelBuffer(modelBuffer):
 			if unknown5 != 0:
 				parserWarning("Geometry unknown5 != 0")
 			
+			if datumType in fieldsSeen:
+				if parserSettings.strictParsing:
+					raise InvalidModel(f"Duplicate vertex field {datumType} found in vertex format definition")
+				else:
+					continue
+			fieldsSeen.append(datumType)
+			
 			if vertexCount is None:
 				vertexCount = fieldVertexCount
 			elif vertexCount != fieldVertexCount:
-				# TODO: This is illegal, but happens sometimes in old-plugin exports.
-				# Is this the correct solution?
-				continue
-			
-			if datumType in fieldsSeen:
-				raise InvalidModel(f"Duplicate vertex field {datumType} found in vertex format definition")
-			fieldsSeen.append(datumType)
+				if parserSettings.strictParsing:
+					raise InvalidModel(f"Vertex fields with conflicting vertex count found in vertex format definition")
+				else:
+					continue
 			
 			if datumType == ModelFile.VertexDatumType.position:
 				if datumFormat == ModelFile.VertexDatumFormat.tripleFloat32:
@@ -577,6 +593,42 @@ def readModelBuffer(modelBuffer):
 		
 		return (vertexFields, vertices, vertexEncodings)
 	
+	def parseFacesWithLooseVertexRecovery(faceVertexStream, faceVertexCount, vertices):
+		#
+		# This mesh was exported by the old plugin while it had loose vertices. Those loose vertices are not part of
+		# the vertices table, but they do occupy space in the vertex ID space. As a consequence, the mesh is corrupt,
+		# as the vertex IDs used in the face list refer to vertex IDs that may be $numberOfLooseVertices too high.
+		#
+		# We can compensate for this corruption by interpreting each vertex ID in the face list as referring to the vertex
+		# (apparent vertex ID - number of unused vertex IDs that referred to loose vertices, smaller than apparent vertex ID).
+		#
+		verticesSeen = set()
+		faceVertexIDs = []
+		for i in range(faceVertexCount // 3):
+			(index1, index2, index3) = unpack('< 3H', faceVertexStream.read(6))
+			verticesSeen.add(index1)
+			verticesSeen.add(index2)
+			verticesSeen.add(index3)
+		
+		if len(verticesSeen) != len(vertices):
+			return None
+		
+		effectiveVertexIDs = {}
+		for i in range(max(verticesSeen) + 1):
+			if i in verticesSeen:
+				effectiveVertexIDs[i] = len(effectiveVertexIDs)
+		
+		faceVertexStream = faceVertexStream.streamFrom(0)
+		faces = []
+		for i in range(faceVertexCount // 3):
+			(index1, index2, index3) = unpack('< 3H', faceVertexStream.read(6))
+			faces.append(ModelFile.Face(
+				vertices[effectiveVertexIDs[index1]],
+				vertices[effectiveVertexIDs[index2]],
+				vertices[effectiveVertexIDs[index3]],
+			))
+		return faces
+	
 	def parseFaces(section, faceDescriptorRecord, vertices):
 		(facesStartOffset, unknown6, dataFormat, faceVertexCount, lodLevels, lodOffset) = unpack('< 6I', faceDescriptorRecord)
 		
@@ -597,12 +649,23 @@ def readModelBuffer(modelBuffer):
 			endFaceVertex = faceVertexCount
 		
 		faceVertexStream = section.streamFrom(facesStartOffset + 2 * startFaceVertex)
+		faceVertexCount = endFaceVertex - startFaceVertex
 		faces = []
-		for i in range((endFaceVertex - startFaceVertex) // 3):
+		for i in range(faceVertexCount // 3):
 			(index1, index2, index3) = unpack('< 3H', faceVertexStream.read(6))
 			if index1 >= len(vertices) or index2 >= len(vertices) or index3 >= len(vertices):
+				if not parserSettings.strictParsing:
+					#
+					# Try a second, slower parse using loose vertex recovery
+					# If it succeeds, swallow the error
+					#
+					faces = parseFacesWithLooseVertexRecovery(faceVertexStream.streamFrom(0), faceVertexCount, vertices)
+					if faces is not None:
+						break
+				
 				raise InvalidModel("Invalid vertex referenced by face")
 			faces.append(ModelFile.Face(vertices[index1], vertices[index2], vertices[index3]))
+		
 		return faces
 	
 	def parseMeshGeometries(sections):
@@ -828,14 +891,14 @@ def readModelBuffer(modelBuffer):
 	output.bones = bones
 	output.materials = materials
 	output.meshes = meshes
-	return output
+	return (output, warnings)
 
-def readModelStream(stream):
-	return readModelBuffer(stream.read())
+def readModelStream(stream, parserSettings):
+	return readModelBuffer(stream.read(), parserSettings)
 
-def readModelFile(filename):
+def readModelFile(filename, parserSettings):
 	with open(filename, 'rb') as stream:
-		return readModelStream(open(filename, 'rb'))
+		return readModelStream(open(filename, 'rb'), parserSettings)
 
 
 

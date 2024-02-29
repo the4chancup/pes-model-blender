@@ -12,15 +12,53 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 	bl_label = "Import .model"
 	bl_options = {'REGISTER', 'UNDO'}
 	
+	ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
+	lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)
+	
 	import_label = "PES model (.model)"
 	
 	filename_ext = ".model"
 	filter_glob = bpy.props.StringProperty(default="*.model", options={'HIDDEN'})
 	
+	def invoke(self, context, event):
+		self.ignore_parser_warnings = context.scene.pes_model_ignore_parser_warnings
+		self.lenient_parsing = context.scene.pes_model_lenient_parsing
+		return bpy_extras.io_utils.ImportHelper.invoke(self, context, event)
+	
 	def execute(self, context):
 		filename = self.filepath
 		
-		modelFile = ModelFile.readModelFile(filename)
+		parserSettings = ModelFile.ParserSettings()
+		parserSettings.ignoreParserWarnings = self.ignore_parser_warnings
+		parserSettings.strictParsing = not self.lenient_parsing
+		
+		try:
+			(modelFile, warnings) = ModelFile.readModelFile(filename, parserSettings)
+		except ModelFile.FatalParserWarning as e:
+			errorMessage = (
+f'''ERROR: Unexpected .model property: {str(e)}
+
+This file uses features of the .model file format the plugin does not understand. Editing it may not work correctly.
+The plugin can ignore this problem, continue, and hope for the best. To try this, enable the Ignore Parser Warnings import setting.'''
+			)
+			self.report({'ERROR'}, errorMessage)
+			return {'CANCELLED'}
+		
+		if len(warnings) > 0:
+			warningString = "        \t".join(warnings)
+			warningMessage = (
+f'''WARNING
+
+This file uses features of the .model file format the plugin does not understand. Editing it may not work correctly.
+Whatever has made it into blender will probably work fine; but if you export this to replace a PES file, it will probably not work as expected.
+Here be dragons, test carefully, etc.
+
+Specifically, the following warnings are reported:
+        {warningString}
+
+If you get this file to work, let me know, because that's good information.'''
+			)
+			self.report({'WARNING'}, warningMessage)
 		
 		IO.importModel(context, modelFile, filename)
 		
@@ -66,6 +104,28 @@ class PES_Model_Scene_Export_Object(bpy.types.Operator, bpy_extras.io_utils.Expo
 
 def PES_Model_Scene_Import_MenuItem(self, context):
 	self.layout.operator(PES_Model_Scene_Import.bl_idname, text=PES_Model_Scene_Import.import_label)
+
+class PES_Model_Scene_Panel_Model_Import_Settings(bpy.types.Menu):
+	"""Import Settings"""
+	bl_label = "Import settings"
+	
+	def draw(self, context):
+		#self.layout.prop(context.scene, 'fmdl_import_extensions_enabled')
+		
+		#row = self.layout.row()
+		#row.prop(context.scene, 'fmdl_import_loop_preservation')
+		#row.enabled = context.scene.fmdl_import_extensions_enabled
+		
+		#row = self.layout.row()
+		#row.prop(context.scene, 'fmdl_import_mesh_splitting')
+		#row.enabled = context.scene.fmdl_import_extensions_enabled
+		
+		#row = self.layout.row()
+		#row.prop(context.scene, 'fmdl_import_load_textures')
+		
+		self.layout.prop(context.scene, 'pes_model_ignore_parser_warnings')
+		
+		self.layout.prop(context.scene, 'pes_model_lenient_parsing')
 
 class PES_Model_Scene_Panel_Model_Remove(bpy.types.Operator):
 	"""Disable separate exporting"""
@@ -121,7 +181,11 @@ class PES_Model_Scene_Panel(bpy.types.Panel):
 		modelFileObjects.sort(key = lambda object: object.name)
 		
 		mainColumn = self.layout.column()
-		mainColumn.operator(PES_Model_Scene_Import.bl_idname)
+		importRow = mainColumn.row()
+		buttonColumn = importRow.column()
+		buttonColumn.operator(PES_Model_Scene_Import.bl_idname)
+		importRow.menu(PES_Model_Scene_Panel_Model_Import_Settings.__name__, icon = 'DOWNARROW_HLT', text = "")
+		
 		for object in modelFileObjects:
 			box = mainColumn.box()
 			column = box.column()
@@ -171,6 +235,7 @@ class PES_Model_Mesh_Panel(bpy.types.Panel):
 classes = [
 	PES_Model_Scene_Import,
 	PES_Model_Scene_Export_Object,
+	PES_Model_Scene_Panel_Model_Import_Settings,
 	PES_Model_Scene_Panel_Model_Remove,
 	PES_Model_Scene_Panel_Model_Select_Filename,
 	PES_Model_Scene_Panel,
@@ -182,6 +247,8 @@ classes = [
 def register():
 	bpy.types.Object.pes_model_file = bpy.props.BoolProperty(name = "Is .model file", options = {'SKIP_SAVE'})
 	bpy.types.Object.pes_model_filename = bpy.props.StringProperty(name = ".model filename", options = {'SKIP_SAVE'})
+	bpy.types.Scene.pes_model_ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
+	bpy.types.Scene.pes_model_lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)
 	
 	for c in classes:
 		bpy.utils.register_class(c)
