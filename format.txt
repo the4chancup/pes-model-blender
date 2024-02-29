@@ -1,0 +1,441 @@
+# .model file format
+
+A .model file contains a renderable entity for pes16-17. Usually this takes for form of a set of meshes, but not always; there are (poorly understood) niche-usage models that contain render instructions other than meshes. This document only covers mesh models.
+
+A .model file does not contain shader settings for any of the meshes it defines. Instead, meshes contain the name of a shader configuration / material definition defined elsewhere, generally in the .mtl file accompanying the .model file. The structure of those .mtl files is not described here.
+
+Similar to .fmdl files, a .model file does not contain a definition of an animation skeleton; instead, it refers to names of bones defined elsewhere, presumably hardcoded in the pes executable. Unlike .fmdl files, .model files do contain the reference orientation of the bones it references; that is, it contains the equivalent of pes18+ .skl files internally.
+
+
+
+## Container structure
+
+The central organizational data structure used in the .model format is the StructArray. A StructArray represents an array of structs, which may contain pointers of subsidiary data structures also packed inside the StructArray, packaged into a bytearray blob. A StructArray also contains an optional header struct for the array as a whole.
+
+A StructArray structure consists of an array of equal-sized records, followed by a sequence of bytearray blobs pointed to by fields in the records. The records have no standardized structure, and rarely contain information on the length of each blob; thus, it is not possible to reconstruct the individual bytearray blobs in the StructArray in a generic way.
+
+struct StructArray {
+	RecordArray records;
+	bytearray[] blobs;
+}
+
+A RecordArray structure contains an array of equal-sized records, plus a header. It contains information on the size and quantity of those records, but nothing on their meaning.
+
+struct RecordArray {
+	struct RecordArrayHeader {
+		uint32 recordOffset;
+		uint32 recordCount;
+		uint32 recordSize;
+	}
+	byte[recordOffset - sizeof(RecordArrayHeader)] structArrayHeader;
+	byte[recordSize][recordCount] records;
+}
+
+Blobs in a StructArray are referenced by a pointer in one of the array's records. This pointer is *usually* encoded as an offset from the file position of the StructArray to the file position of the blob; but occasionally offsets from some different starting point are used instead.
+
+Both records in a StructArray and blobs in a StructArray can be referred to by data structures elsewhere in the .model file. This too takes the form of a pointer encoded as an offset from some reference point to the file position of the record or blob. For such long-distance pointers -- that is, pointers from a record to some data structure that isn't embedded in the StructArray containing the record -- the offset may be negative. Offsets of zero represent a null pointer.
+
+In the rest of this document, we use the notation of StructArray as a template struct, with template parameters representing the structure of the records and (optionally) the array header. A StructArray containing 12-byte records encoding three integers and a 4-byte header containing a single float is denoted as follows:
+
+StructArray {
+	uint32 recordField1;
+	uint32 recordField2;
+	uint32 recordField3;
+} {
+	float32 headerField;
+}
+
+The header parameter can be absent to indicate a 0-byte array header (which is the norm). Fields can end in a question mark to indicate an optional field, representing a StructArray in which the recordSize can be multiple values, either including or excluding those optional fields.
+
+
+
+## Global file structure
+
+Model files may be zlib-compressed, in which case they have a 16-byte WESYS header followed by compressed data. If so, the document structure described here is that of the decompressed data.
+
+A .model file contains an *magic identifier*, a *file header*, and a sequence of *section* blobs packaged in a StructArray:
+
+struct ModelFile {
+	byte[8] magic = 'MODEL\0\0\0';
+	struct ModelFileHeader {
+		uint32 sectionArrayOffset = sizeof(ModelFileHeader);
+		uint16 unknown = 0;
+		uint16 formatVersion; // most pes17 files are version 19, with earliest known version 16. This document covers versions 16-19.
+		uint32 unknown = 9;
+		uint32 flags;
+	} header;
+	StructArray {
+		bytearray* sectionData;
+	} sections;
+}
+
+Most files have a flags value of 0. Known bits include:
+- 1: This model contains cloth physics information. Poorly understood.
+- 4: Used in two shared face models and nowhere else. Meaning unknown.
+
+The main content of the .model file is in the different sections. Each section contains different information in a different structure, based on the index in this array.
+
+
+
+## Section 0: Bone information
+
+Section 0 contains information on the bones used in the model. It scores two unrelated pieces of information:
+
+- For each bone used in the model, it stores the transformation matrix he bone had when posing the model. This is the same information stored in pes18+ in .skl files.
+- It defines a number of bone groups used by the meshes.
+
+Section 0 contains one Section0Body data structure for the transformation matrices, and one for each bone group, all sharing the same structure:
+
+StructArray Section0 {
+	Section0Body* body; // relative to Section0
+}
+
+StructArray Section0Body {
+	bytearray* entryData; // relative to Section0Body
+	uint32 entryDatumType;
+	uint32 entryCount;
+} {
+	uint32 unknown = 2;
+}
+
+The Section0Body containing the transformation matrices contains one record per bone used by the model, with entryDatumType = 7 [float32matrix34] and entryCount = 1. The bytearray pointed to by entryData is a 48-byte buffer containing a 3*4 matrix of float32s, which makes up a transformation matrix. This Section0Body is always the first entry listed in Section0; whether this is required by the format or just a convention is unclear.
+
+The transformation matrices Section0Body contains the transformation matrix for each bone on a per-ID basis, with bones indexed from 0 in the order in which they appear in the Section0Body. Section 5 contains the names of the bones, using the same ID scheme, and the bone groups refer to these IDs.
+
+The Section0Bodies containing bone matrices each contain a single record, with entryDatumType = 1 [uint16] and entryCount equal to the number of bones in the bone group. The bytearray pointed to be entryData contains a sequence of $entryCount uint16s each containing a bone ID as defined by the transformation matrix table. This bytearray is padded to a multiple of 4 bytes.
+
+The entryDatumType values are the same VertexDatumFormat values used in section 1.
+
+
+
+## Section 1: Mesh geometry
+
+Section 1 contains pieces of geometry that can be rendered as a mesh. Not included are details on shading, skeleton animation, and some other rendering details; that information is included in the section 4 mesh data structures instead. Section 1 contains only the bulk data buffers that can be fed into a GPU, as well as their interpretation and memory management details. Each section 1 struct contains a set of vertices and faces, together with format details on how to interpret those.
+
+Each section 1 struct is referenced in a section 4 struct that defines the complete mesh using this geometry. In practice, there is a one-to-one correspondence between meshes and geometries; in theory, it is probably legal for multiple meshes to use the same geometry.
+
+Section 1 uses the following structure:
+
+
+### Overall
+
+StructArray Section1 {
+	uint32 unknown = 1;
+	VertexSet* vertices; // relative to Section1
+	FaceDescriptor* faces; // relative to Section1
+	uint32 unknown = 0;
+	MiscGeometryData* misc?; // relative to Section1, optional
+}
+
+Each Section1 struct has vertices, faces, and metadata pointers that can all be null. The metadata field may be absent entirely, depending on format version. Each null pointer is presumably equivalent to a StructArray with zero elements unless proven otherwise.
+
+
+### Vertices
+
+StructArray VertexSet { // often, but not necessarily, length 1
+	VertexDatumSet* vertexDatums; // relative to Section1
+}
+
+StructArray VertexDatumSet {
+	bytearray* datumBuffer; // relative to Section1
+	uint32 datumType; // enum VertexDatumType
+	uint32 datumFormat; // enum VertexDatumFormat
+	uint32 vertexCount;
+	uint32 unknown = 0;
+} {
+	uint32 unknownCloth;
+	uint32 unknown = 0;
+}
+
+The VertexSet array for a mesh geometry represents the vertices included in that geometry.
+
+Each VertexSet structure represents a sequence of vertices encoded in the same way. It is not known whether a geometry structure can contain more than one VertexSet structure; no models have been found that use this, but the pes .model parser seems to allow it, and it makes sense semantically.
+
+Each VertexDatumSet structure represents one field that is present in the vertices in that dataset. Each has a semantic type, and an encoding format, both of which are enums:
+
+enum VertexDatumFormat {
+	uint16 = 1,
+	uint32 = 2,
+	float32 = 3,
+	doubleFloat32 = 4,
+	tripleFloat32 = 5,
+	quadFloat32 = 6,
+	float32Matrix34 = 7, // matrix of 4*3 float32s
+	quadInt8 = 8,
+	quadFloat8 = 9,
+}
+
+enum VertexDatumType {
+	position = 2, // tripleFloat32
+	normal = 3, // tripleFloat32
+	color = 4, // quadFloat8
+	uv0 = 7, // doubleFloat32
+	uv1 = 8, // doubleFloat32
+	uv2 = 9, // doubleFloat32
+	uv3 = 10, // doubleFloat32
+	// Probably tangent and bitangent, in unknown order
+	unknown2 = 15, // tripleFloat32
+	unknown3 = 16, // tripleFloat32
+	boneWeights = 17, // Can be doubleFloat32, tripleFloat32, quadFloat32. Maybe just float32 as well.
+	boneIndices = 18, // quadInt8
+}
+
+The datumBuffer field in a VertexDatumSet structure points to a buffer containing a sequence of data points, each encoded using the $datumFormat encoding and containing $vertexCount vertices.
+
+Each VertexDatumSet struct has a separate vertexCount field. Normally, this is equal for all structs in a VertexDatumSet array, but this does not seem to be required. Some broken models do not have this, and they do not break PES.
+
+A VertexDatumSet array has an unknownCloth field in its header. For most models, this is 0. Models that use cloth physics have nonzero values here, of which 3, 4, 5 have been observed; these models also have a nonempty section 8. The meaning of this is unclear and such models are not supported by the plugin.
+
+
+### Faces
+
+StructArray FaceDescriptor { // length 1
+	bytearray* faceVertexBuffer; // relative to Section1
+	uint32 unknown = 1; // is this a datumType equivalent meaning "face vertex"?
+	uint32 datumFormat = 1; // uint16
+	uint32 faceVertexCount;
+	uint32 lodLevelCount?; // optional
+	LodLevel* lodLevels?; // optional; relative to Section1
+}
+
+struct LodLevel {
+	uint32 firstFaceVertex; // inclusive
+	uint32 lastFaceVertex; // exclusive
+}
+
+The single FaceDescriptor struct describes the faces included in a mesh geometry. This is a pointer to a face vertex buffer, and a number of face vertices in that buffer. A face vertex is the index of a vertex in the vertices table, encoded as a uint16; each face is a sequence of three face vertices, which means the number of faces in a mesh geometry is faceVertexCount / 3.
+
+A mesh geometry may include multiple LOD levels, in which case the lodLevelCount and lodLevels fields are nonzero. If so, lodLevels points to an array of $lodLevelCount LodLevel structs, each containing a range of faces to be included in that LOD level. These LOD levels are in order of decreasing quality.
+
+
+### Other
+
+StructArray MiscGeometryData {
+	bytearray* data; // relative to MiscGeometryData
+}
+
+The MiscGeometryData array points to a series of data structures containing miscellaneous metadata about a mesh geometry. Each record in the MiscGeometryData array points to a different data structure with unrelated meaning and structure.
+
+struct GeometryBoundingBox {
+	float32 minX, minY, minZ, minW = 0;
+	float32 maxX, maxY, maxZ, maxW = 0;
+}
+
+MiscGeometryData[0].data points to a GeometryBoundingBox. It contains the bounding box for the mesh. Exact computation is unclear (does this take animation ranges into account?).
+
+struct MaterialCombinationFlags {
+	uint32[4] unknown;
+}
+
+MiscGeometryData[1].data points to a MaterialCombinationFlags, containing a sequence of four 32-bit unknowns, which refer to section 9. Section 9 seems to contain a list of material names similar to (but separate from) section 6. For models with an empty section 9, unknown[0] = 1; for models with a nonempty section 9, unknown[0] bit 0 is 0, and the other bits of unknown[0] correspond to entries in section 9. unknown[1--3] have always been observed as 0, and may just contain additional bits.
+
+The meaning of these bits and section 9 are not well understood. Does this define a mesh for which multiple materials apply at the same time, with the bitmask defining which ones? The plugin does not support models using this functionality.
+
+struct UnknownGeometryData {
+	uint32 unknown;
+}
+
+MiscGeometryData[1].data points to an MaterialCombinationFlags. The $unknown field is 0 for all known player models; for stadium models and supporting props, this field has an observed value between 0 and 10.
+
+It seems that all the stadium component models that together make up a stadium use numbers in the same range for that stadium; the different models and meshes for one stadium may use values between 0 and 10, while another only uses value between 0 and 6.
+
+Hypothesis: is this a rendering order field?
+
+
+
+## Section 2: unknown
+
+Section 2 contains a sequence of strings of no apparent relevance to the rest of the model. Section 4 contains a pointer to one Section2 struct per mesh.
+
+StructArray Section2 {
+	NullTerminatedString* string; // relative to Section2
+	uint32 unknown = 0;
+}
+
+The strings contained in section 2 seem to have no relevance to the rest of the model, and do not seem to occur anywhere else in the entire PES data files. PES also does not seem to read them when parsing a .model file.
+
+These strings seem related to the names of the materials used in the model in section 6. Hypothesis: this section contains data about the process that generated the materials used in this model; as such, they are useful only for the original editor used to create the .model, and no longer relevant once loaded into PES.
+
+
+
+## Section 3: unknown
+
+Section 3 contains a sequence of 7-integer structs that are always observed to have the same values, for every tested model to date. Section 4 contains a pointer to one Section3 struct per mesh.
+
+StructArray Section3 {
+	uint32[7] unknown = { 0, 0, 0, 2, 2, 2, 0 };
+}
+
+PES does not seem to read section 3 when parsing a .model file. Their meaning is likely similar to section 2: data private to the editor that generated the .model, unused by PES.
+
+
+
+## Section 4: Meshes
+
+Section 4 contains the definitions of the meshes that a model contains. It contains links to most other sections and ties geometry together with the various settings to render it. It is the root from which most of the rest of the file is traced.
+
+StructArray Section4 {
+	Section1::element* geometry; // relative to Section4; can be negative
+	BoneGroup* boneGroup; // relative to Section4
+	GeneratorData* generatorData; // relative to Section4
+	Section6::element* material; // relative to Section4; can be negative
+	Section10::element* section10; // relative to Section4; can be negative; can be null
+	UnknownData* unknownData?; // relative to Section 4; optional; can be null
+}
+
+The pointer to a geometry is presumably required. The pointer to a material is not known to be optional, but it seems likely that model variants exist for which this field is null.
+
+The pointer to a section10 element is optional; it is null on most models. The meaning of section 10 is unclear, and models with a non-null pointer here are not supported by the plugin.
+
+
+A mesh can optionally have a BoneGroup associated with it:
+
+StructArray BoneGroup {
+	Section0::element* boneGroup; // relative to Section4; can be negative
+}
+
+The BoneGroup array can have either 0 or 1 elements in it. A mesh with a zero-element BoneGroup represents a model without any weight painting; a mesh with a one-element BoneGroup represents a mesh with weight painting. The pointer to the BoneGroup and the pointer to the Section0::element are presumably required.
+
+
+A mesh can point to a GeneratorData array:
+
+StructArray GeneratorData { // length = 2?
+	Section2::element* section2; // relative to Section4; can be negative
+	Section3::element* section3; // relative to Section4; can be negative
+	uint32 unknown; // always equal to 7?
+	uint32 unknown;
+}
+
+Neither the generatorData pointer, nor the GeneratorData array, nor the sections 2 and 3 that they point to, are interpreted by PES. It seems likely that this structure contains data used by the process that generated the model file, without being used by PES. It is not known whether any of these fields are required; they seem definitely not required (because unused) by PES17, but that might not hold for earlier versions.
+
+
+A mesh can point to an UnknownData array:
+
+StructArray UnknownData {
+	UnknownDataElement* data; // relative to UnknownData
+}
+
+struct UnknownDataElement {
+	uint32 type;
+	uint32 unknown;
+	variant data;
+}
+
+If type = 1, data is a null terminated string. If type is anything else, data is a 32-bit value. Known types are 1, 2, 3.
+
+The meaning of this data structure is unclear. It appears in most stadium models, and not in any known player models. The strings contained in it are strings that do not seem to occur anywhere else in the game data. Is this more generation-source data, similar to sections 2 and 3?
+
+Example contents of this data structure:
+[
+    (1, 0, "TI_Mod_WEInfo_Stadium"),
+    (1, 0, "PES2010"),
+    (1, 0, "TI_Util_CN_InfoNode"),
+    (1, 0, "Common"),
+    (2, 0, 0),
+    (2, 0, 0),
+    (1, 0, "TI_Util_CN_InfoNode_AttrBlock"),
+    (1, 0, "Stadium"),
+    (2, 0, 0),
+    (2, 0, 0),
+    (2, 0, 0),
+    (2, 0, 0),
+    (3, 0, 0x13a9),
+    (1, 0, "TI_Util_CN_InfoNode_AttrBlock"),
+]
+
+
+
+## Section 5: Bone names
+
+Section 5 contains the names of bones used by meshes in this model. The skeleton itself is not defined in the .model file, but hardcoded by PES; the .model file just contains the names of those bones in the hardcoded PES skeleton that it uses.
+
+The section contents is simply a sequence of null-terminated strings:
+
+StructArray Section5 {
+	NullTerminatedString* boneName; // relative to Section5
+}
+
+These bone names are referenced by index in section 0, and line up with the bone matrices also defined in section 0. Section 0 bone groups refer to a sequence of bone IDs, which refer to both the bone name (in section 5) and the bone matrix (in section 0) with that index.
+
+
+
+## Section 6: Material names
+
+Section 6 contains the names of materials to be used by meshes in this model. These materials are not defined any further inside the .model file; instead, the material itself is defined and named in the accompanying .mtl file.
+
+The section contents is simply a sequence of null-terminated strings:
+
+StructArray Section6 {
+	NullTerminatedString* material; // relative to Section6
+}
+
+Material names are referred to in section 4. They are referred to as a pointer to the Section6 records.
+
+
+
+## Section 7: Model metadata
+
+Section 7 contains a set of miscellaneous metadata about a model. Each record in the Section7 array points to a different data structure with unrelated meaning and structure.
+
+StructArray Section7 {
+	bytearray* data; // relative to Section7
+}
+
+struct BoundingBox {
+	float32 minX, minY, minZ, minW = 0;
+	float32 maxX, maxY, maxZ, maxW = 0;
+}
+
+Section7[0].data points to a BoundingBox. It contains the bounding box for the model as a whole.
+
+struct UnknownSection7 {
+	int32 lodLevels;
+	float32 unknown[3];
+}
+
+Section7[1].data points to an UnknownSection7. Its first field is the number of LOD levels present in the model, with 0 for models that don't use the LOD system (most of them). unknown[2] is zero when the first is zero, and observed as 0.3 otherwise; presumably this is a parameter on when to switch to what LODs. unknown[0] and unknown[1] have always been observed as 0.0625 and 4.0 respectively; presumably these are also rendering parameters of some form, but the details are unclear.
+
+
+
+## Section 8: unknown (cloth physics)
+
+Section 8 contains a sequence of strings:
+
+StructArray Section8 {
+	NullTerminatedString* string; // relative to Section8
+}
+
+For most models, this section is empty (contains zero records). Models for which this section isn't empty have an accompanying .cloth file, suggesting this section is used for implementing cloth physics in a model. Models for which this section isn't empty also have section1.unknownCloth set. No known data structures reference section 8 structures.
+
+The meaning of the strings in this section, the unknownCloth field, the the .cloth files are not well understood. The plugin does not support them.
+
+
+
+## Section 9: unknown (material combinations)
+
+Section 9 contains a sequence of material names, similar to section 6.
+
+StructArray Section9 {
+	NullTerminatedString* string; // relative to Section9
+}
+
+For most models, this section is empty (contains zero records). Models for which this section isn't empty also have section1.MaterialCombinationFlags.unknown[0] set, to a bitmask with each bit corresponding to one section 9 entry. No other known data structures reference section 9 structures.
+
+The meaning of these strings and the MaterialCombinationFlags flags re not well understood. Does this define a mesh for which multiple materials apply at the same time, with the bitmask defining which ones? The plugin does not support models using this functionality.
+
+
+
+## Section 10: unknown (locator models)
+
+Section 10 contains information used in so-called locator models, which presumably contains coordinates and orientations of where to render graphics defined elsewhere. Very little is known about its structure, and the plugin does not support these models.
+
+Locator models have meshes that refer to an entry in section 10. These meshes have mesh geometry, but that mesh geometry contains only vertices, without any faces. Presumably section 10 contains some form of alternative geometric information, but no details are known.
+
+Models that don't use section 10 use a StructArray<16, 4> with 0 records:
+
+StructArray Section10 {
+	bytearray[16] unknown;
+} {
+	bytearray[4] unknown;
+}
+
