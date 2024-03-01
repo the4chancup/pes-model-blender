@@ -243,8 +243,16 @@ def importModel(context, model, filename):
 	
 	def importMeshes(context, model, armatureObjectID, boneIDs):
 		meshObjectIDs = []
+		meshIndex = 0
 		for mesh in model.meshes:
-			meshObjectIDs.append(importMesh(mesh, "mesh_id %s" % len(meshObjectIDs), armatureObjectID, boneIDs))
+			found = False
+			while not found:
+				name = f"mesh {meshIndex}"
+				meshIndex += 1
+				if name not in bpy.data.objects and name not in bpy.data.meshes:
+					found = True
+			
+			meshObjectIDs.append(importMesh(mesh, name, armatureObjectID, boneIDs))
 		
 		return meshObjectIDs
 	
