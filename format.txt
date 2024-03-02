@@ -302,11 +302,15 @@ A mesh can point to a GeneratorData array:
 StructArray GeneratorData { // length = 2?
 	Section2::element* section2; // relative to Section4; can be negative
 	Section3::element* section3; // relative to Section4; can be negative
-	uint32 unknown; // always equal to 7?
-	uint32 unknown;
+	uint32 unknown1; // always equal to 7?
+	uint32 unknown2;
 }
 
 Neither the generatorData pointer, nor the GeneratorData array, nor the sections 2 and 3 that they point to, are interpreted by PES. It seems likely that this structure contains data used by the process that generated the model file, without being used by PES. It is not known whether any of these fields are required; they seem definitely not required (because unused) by PES17, but that might not hold for earlier versions.
+
+The plugin uses this array, combined with section 2, to store annotations for each mesh in string form. Each annotation is stored as a GeneratorData record, with section2 pointing to an annotation string, section3 = 0, unknown1 = 7, and unknown2 encoding the annotation type. Possible annotations include:
+unknown2 == 128: the unknown2 string is a mesh name.
+unknown2 == 129: the unknown2 string is an extension header in "key: value" format.
 
 
 A mesh can point to an UnknownData array:

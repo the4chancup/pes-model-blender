@@ -245,13 +245,15 @@ def importModel(context, model, filename):
 		meshObjectIDs = []
 		meshIndex = 0
 		for mesh in model.meshes:
-			found = False
-			while not found:
-				name = f"mesh {meshIndex}"
-				meshIndex += 1
-				if name not in bpy.data.objects and name not in bpy.data.meshes:
-					found = True
-			
+			if mesh.name is not None:
+				name = mesh.name
+			else:
+				while True:
+					name = f"mesh {meshIndex}"
+					meshIndex += 1
+					if name not in bpy.data.objects and name not in bpy.data.meshes:
+						break
+				
 			meshObjectIDs.append(importMesh(mesh, name, armatureObjectID, boneIDs))
 		
 		return meshObjectIDs
@@ -665,6 +667,7 @@ def exportModel(context, rootObjectName):
 		mesh.material = blenderMesh.pes_model_material
 		mesh.vertexFields = vertexFields
 		mesh.boundingBox = boundingBox
+		mesh.name = blenderMeshObject.name
 		
 		return mesh
 	

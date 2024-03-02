@@ -16,6 +16,11 @@ class ParserSettings:
 		self.ignoreParserWarnings = True
 		self.strictParsing = False
 
+class MeshAnnotation:
+	MESH_NAME = 128
+	EXTENSION_HEADER = 129
+	
+
 class ModelFile:
 	class VertexDatumType:
 		position = 2 # tripleFloat32
@@ -126,8 +131,11 @@ class ModelFile:
 			self.boneGroup = None
 			self.material = None
 			self.vertexFields = None
-			self.vertexEncodings = None
 			self.boundingBox = None
+			# extension fields
+			self.name = None
+			self.extensionHeaders = set()
+			self.vertexEncodings = None
 	
 	def __init__(self):
 		self.bones = []
@@ -752,11 +760,20 @@ def readModelBuffer(modelBuffer, parserSettings):
 		
 		return geometries
 	
-	def parseMeshes(sections, boneGroups, materials, geometries):
+	def parseAnnotationStrings(sections):
+		annotationStrings = {}
+		annotationStringArray = StructArray.parse(sections[2], 8)
+		for (address, record) in annotationStringArray.records.items():
+			(offset, unknown) = unpack('< II', record)
+			annotationString = annotationStringArray.streamFrom(offset).readString()
+			annotationStrings[address] = annotationString
+		return annotationStrings
+	
+	def parseMeshes(sections, boneGroups, materials, geometries, annotationStrings):
 		meshes = []
 		meshArray = StructArray.parse(sections[4], [20, 24], 0)
 		for meshRecord in meshArray.records.values():
-			(relativeGeometryAddress, boneGroupOffset, metadataOffset, relativeMaterialAddress, relativeSection10Address) = unpack('< i I I i i', meshRecord[0:20])
+			(relativeGeometryAddress, boneGroupOffset, annotationsOffset, relativeMaterialAddress, relativeSection10Address) = unpack('< i I I i i', meshRecord[0:20])
 			if len(meshRecord) >= 24:
 				(unknownDataOffset, ) = unpack('< I', meshRecord[20:24])
 			else:
@@ -770,6 +787,23 @@ def readModelBuffer(modelBuffer, parserSettings):
 				boneGroupAddress = meshArray.addressOf(relativeBoneGroupOffset)
 			else:
 				raise InvalidModel("Unexpected mesh bone group format")
+			
+			meshName = None
+			extensionHeaders = set()
+			if annotationsOffset > 0:
+				annotationArray = StructArray.parse(meshArray.streamFrom(annotationsOffset), 16)
+				for annotationRecord in annotationArray.records.values():
+					(relativeAnnotationStringOffset, section3Offset, unknown, annotationType) = unpack('< 4i', annotationRecord)
+					annotationStringAddress = meshArray.addressOf(relativeAnnotationStringOffset)
+					if annotationStringAddress in annotationStrings:
+						annotationString = annotationStrings[annotationStringAddress]
+					else:
+						continue
+					
+					if annotationType == MeshAnnotation.MESH_NAME:
+						meshName = annotationString
+					elif annotationType == MeshAnnotation.EXTENSION_HEADER:
+						extensionHeaders.add(annotationString)
 			
 			#
 			# metadataOffset points to a structure containing metadata not used by PES;
@@ -848,6 +882,8 @@ def readModelBuffer(modelBuffer, parserSettings):
 			mesh.vertexFields = geometry.vertexFields
 			mesh.vertexEncodings = geometry.vertexEncodings
 			mesh.boundingBox = geometry.boundingBox
+			mesh.name = meshName
+			mesh.extensionHeaders = extensionHeaders
 			meshes.append(mesh)
 		
 		return meshes
@@ -859,7 +895,8 @@ def readModelBuffer(modelBuffer, parserSettings):
 	(bones, boneGroups) = parseBoneGroups(sections)
 	materials = parseMaterials(sections)
 	geometries = parseMeshGeometries(sections)
-	meshes = parseMeshes(sections, boneGroups, materials, geometries)
+	annotationStrings = parseAnnotationStrings(sections)
+	meshes = parseMeshes(sections, boneGroups, materials, geometries, annotationStrings)
 	
 	#
 	# Sections 2 and 3 contains information unused by PES, likely relevant to the master
@@ -1213,7 +1250,29 @@ def writeModel(model):
 		))
 		return geometryOffset
 	
-	def storeMesh(meshSection, meshSectionAddress, mesh, geometryAddresses, boneGroupAddresses, materialAddresses):
+	def getMeshAnnotations(mesh):
+		annotations = []
+		if mesh.name is not None:
+			annotations.append((MeshAnnotation.MESH_NAME, mesh.name))
+		for header in mesh.extensionHeaders:
+			annotations.append((MeshAnnotation.EXTENSION_HEADER, header))
+		return annotations
+	
+	def storeAnnotations(sections, meshAnnotations):
+		annotationStrings = set(annotationString for annotations in meshAnnotations.values() for (annotationType, annotationString) in annotations)
+		annotationSection = StructArray(8, len(annotationStrings))
+		
+		annotationStringRecordOffsets = {}
+		for annotationString in annotationStrings:
+			annotationBlob = annotationString.encode('utf-8') + b'\0'
+			annotationStringOffset = annotationSection.addBlob(annotationBlob)
+			annotationRecordOffset = annotationSection.addRecord(pack('< II', annotationStringOffset, 0)) # no clue what the 0 means
+			annotationStringRecordOffsets[annotationString] = annotationRecordOffset
+		
+		sectionOffset = sections.addSection(2, annotationSection.encode())
+		return relativizeAddresses(annotationStringRecordOffsets, sectionOffset)
+	
+	def storeMesh(meshSection, meshSectionAddress, mesh, annotations, geometryAddresses, annotationStringAddresses, boneGroupAddresses, materialAddresses):
 		if mesh.boneGroup is None:
 			boneGroupRecordOffset = 0
 		else:
@@ -1222,10 +1281,24 @@ def writeModel(model):
 			boneGroupArray.addRecord(pack('< i', boneGroupOffset))
 			boneGroupRecordOffset = meshSection.addBlob(boneGroupArray.encode())
 		
+		if len(annotations) == 0:
+			annotationsArrayOffset = 0
+		else:
+			annotationsArray = RecordArray(16)
+			for (annotationType, annotationString) in annotations:
+				annotationStringOffset = annotationStringAddresses[annotationString] - meshSectionAddress
+				annotationsArray.addRecord(pack('< 4i',
+					annotationStringOffset,
+					0, # section3Offset
+					7, # unknown
+					annotationType,
+				))
+			annotationsArrayOffset = meshSection.addBlob(annotationsArray.encode())
+		
 		meshSection.addRecord(pack('< i II i II',
 			geometryAddresses[mesh] - meshSectionAddress,
 			boneGroupRecordOffset,
-			0, # metadataOffset
+			annotationsArrayOffset,
 			materialAddresses[mesh.material] - meshSectionAddress,
 			0, # section10Offset
 			0, # unknownDataOffset
@@ -1236,24 +1309,36 @@ def writeModel(model):
 		meshSection = StructArray(24, len(meshes))
 		
 		geometryOffsets = {}
+		meshAnnotations = {}
 		
 		for mesh in meshes:
 			geometryOffset = storeMeshGeometry(geometrySection, mesh)
 			geometryOffsets[mesh] = geometryOffset
+			
+			meshAnnotations[mesh] = getMeshAnnotations(mesh)
 		
 		geometrySectionOffset = sections.addSection(1, geometrySection.encode())
 		geometryAddresses = relativizeAddresses(geometryOffsets, geometrySectionOffset)
+		
+		annotationStringAddresses = storeAnnotations(sections, meshAnnotations)
+		
 		meshSectionAddress = sections.nextSectionAddress()
 		
 		for mesh in meshes:
-			storeMesh(meshSection, meshSectionAddress, mesh, geometryAddresses, boneGroupAddresses, materialAddresses)
+			storeMesh(
+				meshSection,
+				meshSectionAddress,
+				mesh,
+				meshAnnotations[mesh],
+				geometryAddresses,
+				annotationStringAddresses,
+				boneGroupAddresses,
+				materialAddresses,
+			)
 		
 		sections.addSection(4, meshSection.encode())
 	
 	def storeDummySections(sections):
-		# Suspected editor-only data, in string form
-		sections.addSection(2, StructArray(8, 0).encode())
-		
 		# Suspected editor-only data, in numeric form
 		sections.addSection(3, StructArray(28, 0).encode())
 		
