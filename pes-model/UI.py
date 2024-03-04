@@ -36,10 +36,10 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 			(modelFile, warnings) = ModelFile.readModelFile(filename, parserSettings)
 		except ModelFile.FatalParserWarning as e:
 			errorMessage = (
-f'''ERROR: Unexpected .model property: {str(e)}
+'''ERROR: Unexpected .model property: %s
 
 This file uses features of the .model file format the plugin does not understand. Editing it may not work correctly.
-The plugin can ignore this problem, continue, and hope for the best. To try this, enable the Ignore Parser Warnings import setting.'''
+The plugin can ignore this problem, continue, and hope for the best. To try this, enable the Ignore Parser Warnings import setting.''' % str(e)
 			)
 			self.report({'ERROR'}, errorMessage)
 			return {'CANCELLED'}
@@ -47,16 +47,16 @@ The plugin can ignore this problem, continue, and hope for the best. To try this
 		if len(warnings) > 0:
 			warningString = "        \t".join(warnings)
 			warningMessage = (
-f'''WARNING
+'''WARNING
 
 This file uses features of the .model file format the plugin does not understand. Editing it may not work correctly.
 Whatever has made it into blender will probably work fine; but if you export this to replace a PES file, it will probably not work as expected.
 Here be dragons, test carefully, etc.
 
 Specifically, the following warnings are reported:
-        {warningString}
+        %s
 
-If you get this file to work, let me know, because that's good information.'''
+If you get this file to work, let me know, because that's good information.''' % warningString
 			)
 			self.report({'WARNING'}, warningMessage)
 		
