@@ -200,10 +200,19 @@ def readModelBuffer(modelBuffer, parserSettings):
 			return str(bytes(string), 'utf-8')
 	
 	class RecordArray:
-		def __init__(self, header, recordSize, records):
+		def __init__(self, header, recordSize, labelledRecords):
 			self.header = header
 			self.recordSize = recordSize
-			self.records = records
+			self.labelledRecords = labelledRecords
+		
+		def records(self):
+			return [record for (address, record) in self.labelledRecords]
+		
+		def items(self):
+			return self.labelledRecords
+		
+		def __len__(self):
+			return len(self.labelledRecords)
 		
 		@staticmethod
 		def parse(stream, expectedRecordSize = None, expectedHeaderSize = None):
@@ -222,18 +231,17 @@ def readModelBuffer(modelBuffer, parserSettings):
 				raise InvalidModel("Unexpected record array record size")
 			
 			header = stream.read(headerSize)
-			records = {}
+			labelledRecords = []
 			for i in range(recordCount):
 				address = stream.cursorAddress()
 				record = stream.read(recordSize)
-				records[address] = record
-			return RecordArray(header, recordSize, records)
+				labelledRecords.append((address, record))
+			return RecordArray(header, recordSize, labelledRecords)
 	
-	class StructArray:
+	class StructArray(RecordArray):
 		def __init__(self, stream, recordArray):
+			super().__init__(recordArray.header, recordArray.recordSize, recordArray.labelledRecords)
 			self.stream = stream
-			self.header = recordArray.header
-			self.records = recordArray.records
 		
 		def address(self):
 			return self.addressOf(0)
@@ -279,7 +287,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 		if unknown1 != 0:
 			parserWarning("Header unknown1 != 0")
 		if majorVersion < 16 or majorVersion > 19:
-			print(f"WARNING: Unsupposed .model format version {majorVersion}, let's hope this works")
+			print("WARNING: Unsupposed .model format version %s, let's hope this works" % majorVersion)
 		if unknown2 != 9:
 			parserWarning("Header unknown2 != 0")
 		if flags != 0:
@@ -287,7 +295,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 		
 		sections = []
 		sectionArray = StructArray.parse(stream.streamFrom(tocOffset + len(magicBuffer)), 4)
-		for record in sectionArray.records.values():
+		for record in sectionArray.records():
 			(offset, ) = unpack('< I', record)
 			sectionStream = sectionArray.streamFrom(offset)
 			sections.append(sectionStream)
@@ -297,7 +305,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 	def parseBoneNames(sections):
 		boneNames = []
 		boneNameArray = StructArray.parse(sections[5], 4)
-		for record in boneNameArray.records.values():
+		for record in boneNameArray.records():
 			(offset, ) = unpack('< I', record)
 			name = boneNameArray.streamFrom(offset).readString()
 			boneNames.append(name)
@@ -310,7 +318,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 		boneIndexGroups = {}
 		
 		boneDataArray = StructArray.parse(sections[0], 4)
-		for boneDataRecord in boneDataArray.records.values():
+		for boneDataRecord in boneDataArray.records():
 			(dataOffset, ) = unpack('< I', boneDataRecord)
 			dataArray = StructArray.parse(boneDataArray.streamFrom(dataOffset), 12, 4)
 			(dataEnum, ) = unpack('< I', dataArray.header)
@@ -338,7 +346,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 			# on the entryType.
 			#
 			
-			for dataRecord in dataArray.records.values():
+			for dataRecord in dataArray.records():
 				(entryOffset, entryType, entryCount) = unpack('< 3I', dataRecord)
 				
 				if entryType == 7:
@@ -380,7 +388,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 	def parseMaterials(sections):
 		materials = {}
 		materialArray = StructArray.parse(sections[6], 4)
-		for (address, record) in materialArray.records.items():
+		for (address, record) in materialArray.items():
 			(offset, ) = unpack('< I', record)
 			name = materialArray.streamFrom(offset).readString()
 			materials[address] = name
@@ -427,12 +435,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 		if unknown4 != 0:
 			parserWarning("Geometry unknown4 != 0")
 		
-		spam = []
-		for vertexFieldRecord in vertexFieldArray.records.values():
-			(fieldOffset, datumType, datumFormat, fieldVertexCount, unknown5) = unpack('< 5I', vertexFieldRecord)
-			spam.append((fieldOffset, datumType, datumFormat, fieldVertexCount, unknown5))
-		
-		for vertexFieldRecord in vertexFieldArray.records.values():
+		for vertexFieldRecord in vertexFieldArray.records():
 			(fieldOffset, datumType, datumFormat, fieldVertexCount, unknown5) = unpack('< 5I', vertexFieldRecord)
 			
 			if unknown5 != 0:
@@ -440,7 +443,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 			
 			if datumType in fieldsSeen:
 				if parserSettings.strictParsing:
-					raise InvalidModel(f"Duplicate vertex field {datumType} found in vertex format definition")
+					raise InvalidModel("Duplicate vertex field %s found in vertex format definition" % datumType)
 				else:
 					continue
 			fieldsSeen.append(datumType)
@@ -449,7 +452,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 				vertexCount = fieldVertexCount
 			elif vertexCount != fieldVertexCount:
 				if parserSettings.strictParsing:
-					raise InvalidModel(f"Vertex fields with conflicting vertex count found in vertex format definition")
+					raise InvalidModel("Vertex fields with conflicting vertex count found in vertex format definition")
 				else:
 					continue
 			
@@ -679,7 +682,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 	def parseMeshGeometries(sections):
 		geometries = {}
 		geometryArray = StructArray.parse(sections[1], [16, 20])
-		for (address, record) in geometryArray.records.items():
+		for (address, record) in geometryArray.items():
 			(unknown1, vertexSetOffset, faceDescriptorOffset, unknown2) = unpack('< 4I', record[0:16])
 			if len(record) >= 20:
 				(miscOffset, ) = unpack('< I', record[16:20])
@@ -692,25 +695,25 @@ def readModelBuffer(modelBuffer, parserSettings):
 				parserWarning("Geometry unknown2 != 0")
 			
 			vertexSetArray = StructArray.parse(geometryArray.streamFrom(vertexSetOffset), 4)
-			if len(vertexSetArray.records) != 1:
+			if len(vertexSetArray) != 1:
 				raise InvalidModel("Number of geometry vertex sets != 1")
-			vertexSetRecord = list(vertexSetArray.records.values())[0]
+			vertexSetRecord = list(vertexSetArray.records())[0]
 			(fieldsOffset, ) = unpack('< I', vertexSetRecord)
 			vertexFieldArray = StructArray.parse(geometryArray.streamFrom(fieldsOffset), 20, 8)
 			
 			(vertexFields, vertices, vertexEncodings) = parseVertices(sections[1], vertexFieldArray)
 			
 			faceDescriptorArray = StructArray.parse(geometryArray.streamFrom(faceDescriptorOffset), 24)
-			if len(faceDescriptorArray.records) != 1:
+			if len(faceDescriptorArray) != 1:
 				raise InvalidModel("Unexpected number of face header array entries")
-			faceDescriptorRecord = list(faceDescriptorArray.records.values())[0]
+			faceDescriptorRecord = list(faceDescriptorArray.records())[0]
 			
 			faces = parseFaces(sections[1], faceDescriptorRecord, vertices)
 			
 			miscDataOffsets = []
 			if miscOffset != 0:
 				miscDataArray = StructArray.parse(geometryArray.streamFrom(miscOffset), 4)
-				for miscDataRecord in miscDataArray.records.values():
+				for miscDataRecord in miscDataArray.records():
 					(miscDataOffset, ) = unpack('< I', miscDataRecord)
 					miscDataOffsets.append(miscDataOffset)
 			
@@ -763,7 +766,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 	def parseAnnotationStrings(sections):
 		annotationStrings = {}
 		annotationStringArray = StructArray.parse(sections[2], 8)
-		for (address, record) in annotationStringArray.records.items():
+		for (address, record) in annotationStringArray.items():
 			(offset, unknown) = unpack('< II', record)
 			annotationString = annotationStringArray.streamFrom(offset).readString()
 			annotationStrings[address] = annotationString
@@ -772,7 +775,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 	def parseMeshes(sections, boneGroups, materials, geometries, annotationStrings):
 		meshes = []
 		meshArray = StructArray.parse(sections[4], [20, 24], 0)
-		for meshRecord in meshArray.records.values():
+		for meshRecord in meshArray.records():
 			(relativeGeometryAddress, boneGroupOffset, annotationsOffset, relativeMaterialAddress, relativeSection10Address) = unpack('< i I I i i', meshRecord[0:20])
 			if len(meshRecord) >= 24:
 				(unknownDataOffset, ) = unpack('< I', meshRecord[20:24])
@@ -780,10 +783,10 @@ def readModelBuffer(modelBuffer, parserSettings):
 				unknownDataOffset = 0
 			
 			boneGroupArray = StructArray.parse(meshArray.streamFrom(boneGroupOffset), 4)
-			if len(boneGroupArray.records) == 0:
+			if len(boneGroupArray) == 0:
 				boneGroupAddress = None
-			elif len(boneGroupArray.records):
-				(relativeBoneGroupOffset, ) = unpack('< i', list(boneGroupArray.records.values())[0])
+			elif len(boneGroupArray) == 1:
+				(relativeBoneGroupOffset, ) = unpack('< i', list(boneGroupArray.records())[0])
 				boneGroupAddress = meshArray.addressOf(relativeBoneGroupOffset)
 			else:
 				raise InvalidModel("Unexpected mesh bone group format")
@@ -792,7 +795,7 @@ def readModelBuffer(modelBuffer, parserSettings):
 			extensionHeaders = set()
 			if annotationsOffset > 0:
 				annotationArray = StructArray.parse(meshArray.streamFrom(annotationsOffset), 16)
-				for annotationRecord in annotationArray.records.values():
+				for annotationRecord in annotationArray.records():
 					(relativeAnnotationStringOffset, section3Offset, unknown, annotationType) = unpack('< 4i', annotationRecord)
 					annotationStringAddress = meshArray.addressOf(relativeAnnotationStringOffset)
 					if annotationStringAddress in annotationStrings:

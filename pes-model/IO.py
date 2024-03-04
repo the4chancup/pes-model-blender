@@ -249,7 +249,7 @@ def importModel(context, model, filename):
 				name = mesh.name
 			else:
 				while True:
-					name = f"mesh {meshIndex}"
+					name = "mesh %s" % meshIndex
 					meshIndex += 1
 					if name not in bpy.data.objects and name not in bpy.data.meshes:
 						break
@@ -351,7 +351,7 @@ def exportModel(context, rootObjectName):
 		return ModelFile.ModelFile.Bone(bone.name, [v for row in inverseBoneMatrix for v in row][0:12])
 	
 	def exportUnknownBone(boneName):
-		raise ExportError(f'Found vertex group {boneName} without corresponding bone')
+		raise ExportError('Found vertex group %s without corresponding bone' % boneName)
 	
 	def findBone(boneName, candidateArmatures):
 		for armature in candidateArmatures:
@@ -722,8 +722,11 @@ def exportModel(context, rootObjectName):
 	(bones, boneIndices) = exportBones(blenderMeshObjects, blenderArmatureObjects)
 	
 	meshes = []
+	meshNames = {}
 	for blenderMeshObject in blenderMeshObjects:
-		meshes.append(exportMesh(blenderMeshObject, materials, bones, boneIndices, context.scene))
+		mesh = exportMesh(blenderMeshObject, materials, bones, boneIndices, context.scene)
+		meshes.append(mesh)
+		meshNames[mesh] = blenderMeshObject.name
 	
 	boundingBox = calculateBoundingBox(meshes)
 	
@@ -736,11 +739,11 @@ def exportModel(context, rootObjectName):
 	errors = []
 	for mesh in model.meshes:
 		if len(mesh.vertices) > 65535:
-			errors.append("Mesh '%s' contains %s vertices out of a maximum of 65535" % (meshName, len(mesh.vertices)))
+			errors.append("Mesh '%s' contains %s vertices out of a maximum of 65535" % (meshNames[mesh], len(mesh.vertices)))
 		#if len(mesh.faces) > 21845:
-		#	errors.append("Mesh '%s' contains %s faces out of a maximum of 21845" % (meshName, len(mesh.faces)))
+		#	errors.append("Mesh '%s' contains %s faces out of a maximum of 21845" % (meshNames[mesh], len(mesh.faces)))
 		#if mesh.boneGroup is not None and len(mesh.boneGroup.bones) > 32:
-		#	errors.append("Mesh '%s' bone group contains %s bones out of a maximum of 32" % (meshName, len(mesh.boneGroup.bones)))
+		#	errors.append("Mesh '%s' bone group contains %s bones out of a maximum of 32" % (meshNames[mesh], len(mesh.boneGroup.bones)))
 	if len(errors) > 0:
 		raise ExportError(errors)
 	
