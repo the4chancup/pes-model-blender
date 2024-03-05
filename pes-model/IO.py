@@ -41,10 +41,6 @@ def importModel(context, model, filename):
 		# TODO: Make two versions of this, one based on the bone matrix and one based on hardcoded skeleton data
 		
 		#
-		# EXPERIMENT -- compute bone geometry from .model bone matrix
-		#
-		
-		#
 		# bone.matrix is the matrix that transforms coordinates from model space to bone space.
 		# That is, it is the inverse of the matrix that blender uses to define the bone.
 		#
@@ -93,12 +89,26 @@ def importModel(context, model, filename):
 		# The blender bone matrix has the bone vector in column 1 [y], and the normal in column 0 [x].
 		#
 		blenderEditBone.roll = 0
-		normalDotProduct = sum(blenderEditBone.matrix[i][2] * effectiveBoneMatrix[i][1] for i in range(3))
-		blenderEditBone.roll = math.acos(normalDotProduct)
 		
 		#
-		# END EXPERIMENT
+		# To compute the angle between the desired and found normals, first we compute the cosine using the dot
+		# product, which determines the angle up to sign. To find the sign, we compute the cross product, and
+		# dot product that against the bone vector; this is the sine of the angle. atan2() then gives the exact angle.
 		#
+		axis = tuple(effectiveBoneMatrix[i][0] for i in range(3))
+		desiredNormal = tuple(effectiveBoneMatrix[i][1] for i in range(3))
+		currentNormal = tuple(blenderEditBone.matrix[i][2] for i in range(3))
+		
+		normalDotProduct = sum(desiredNormal[i] * currentNormal[i] for i in range(3))
+		normalCrossProduct = (
+			desiredNormal[2] * currentNormal[1] - desiredNormal[1] * currentNormal[2],
+			desiredNormal[0] * currentNormal[2] - desiredNormal[2] * currentNormal[0],
+			desiredNormal[1] * currentNormal[0] - desiredNormal[0] * currentNormal[1],
+		)
+		sine = sum(axis[i] * normalCrossProduct[i] for i in range(3))
+		angle = math.atan2(sine, normalDotProduct)
+		
+		blenderEditBone.roll = angle
 		
 		blenderEditBone.use_connect = False
 		blenderEditBone.hide = False
