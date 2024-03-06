@@ -6,7 +6,7 @@ import os
 import os.path
 import re
 
-from . import ModelFile
+from . import ModelFile, ModelSplitVertexEncoding
 
 import numpy
 
@@ -18,15 +18,29 @@ class ExportError(Exception):
 		else:
 			self.errors = [errors]
 
+class ImportSettings:
+	def __init__(self):
+		self.enableExtensions = True
+		self.enableMeshNames = True
+		self.enableVertexLoopPreservation = True
+		#self.enableMeshSplitting = True
+
+class ExportSettings:
+	def __init__(self):
+		self.enableExtensions = True
+		self.enableMeshNames = True
+		self.enableVertexLoopPreservation = True
+		#self.enableMeshSplitting = True
+
+
+
 def setActiveObject(context, blenderObject):
 	if 'view_layer' in dir(context):
 		context.view_layer.objects.active = blenderObject
 	else:
 		context.scene.objects.active = blenderObject
 
-
-
-def importModel(context, model, filename):
+def importModel(context, model, filename, importSettings = None):
 	UV_MAP_COLOR = 'UVMap'
 	UV_MAP_NORMALS = 'normal_map'
 	
@@ -255,7 +269,7 @@ def importModel(context, model, filename):
 		meshObjectIDs = []
 		meshIndex = 0
 		for mesh in model.meshes:
-			if mesh.name is not None:
+			if importSettings.enableExtensions and importSettings.enableMeshNames and mesh.name is not None:
 				name = mesh.name
 			else:
 				while True:
@@ -263,7 +277,7 @@ def importModel(context, model, filename):
 					meshIndex += 1
 					if name not in bpy.data.objects and name not in bpy.data.meshes:
 						break
-				
+			
 			meshObjectIDs.append(importMesh(mesh, name, armatureObjectID, boneIDs))
 		
 		return meshObjectIDs
@@ -300,6 +314,9 @@ def importModel(context, model, filename):
 	
 	
 	
+	if importSettings.enableExtensions and importSettings.enableVertexLoopPreservation:
+		model = ModelSplitVertexEncoding.decodeModelVertexLoopPreservation(model)
+	
 	if len(model.bones) > 0:
 		(armatureObjectID, boneIDs) = importSkeleton(context, model)
 	else:
@@ -316,7 +333,7 @@ def importModel(context, model, filename):
 	if activeObjectID != None:
 		setActiveObject(context, bpy.data.objects[activeObjectID])
 
-def exportModel(context, rootObjectName):
+def exportModel(context, rootObjectName, exportSettings = None):
 	def exportMaterials(blenderMeshObjects):
 		materials = []
 		for blenderMeshObject in blenderMeshObjects:
@@ -677,7 +694,8 @@ def exportModel(context, rootObjectName):
 		mesh.material = blenderMesh.pes_model_material
 		mesh.vertexFields = vertexFields
 		mesh.boundingBox = boundingBox
-		mesh.name = blenderMeshObject.name
+		if exportSettings.enableExtensions and exportSettings.enableMeshNames:
+			mesh.name = blenderMeshObject.name
 		
 		return mesh
 	
@@ -745,6 +763,9 @@ def exportModel(context, rootObjectName):
 	model.materials = materials
 	model.meshes = meshes
 	model.boundingBox = boundingBox
+	
+	if exportSettings.enableExtensions and exportSettings.enableVertexLoopPreservation:
+		model = ModelSplitVertexEncoding.encodeModelVertexLoopPreservation(model)
 	
 	errors = []
 	for mesh in model.meshes:
