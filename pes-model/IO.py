@@ -725,7 +725,7 @@ def exportModel(context, rootObjectName, exportSettings = None):
 		blenderMeshObjects = []
 		blenderArmatureObjects = []
 		def findMeshObjects(blenderObject, blenderMeshObjects):
-			if blenderObject.type == 'MESH' and len(blenderObject.data.polygons) > 0:
+			if blenderObject.type == 'MESH':
 				blenderMeshObjects.append(blenderObject)
 			if blenderObject.type == 'ARMATURE':
 				blenderArmatureObjects.append(blenderObject)
