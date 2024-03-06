@@ -1358,7 +1358,7 @@ def writeModel(model):
 	sections = Sections(11)
 	
 	storeMetadata(sections, model)
-	boneGroupAddresses = storeBones(sections, model.bones, [mesh.boneGroup for mesh in model.meshes])
+	boneGroupAddresses = storeBones(sections, model.bones, [mesh.boneGroup for mesh in model.meshes if mesh.boneGroup is not None])
 	materialAddresses = storeMaterials(sections, model.materials)
 	storeDummySections(sections)
 	storeMeshes(sections, model.meshes, boneGroupAddresses, materialAddresses)
