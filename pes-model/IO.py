@@ -429,6 +429,9 @@ def exportModel(context, rootObjectName, exportSettings = None):
 		return (bones, boneIndices)
 	
 	def exportMeshGeometry(blenderMeshObject, colorLayer, uvLayerColor, uvLayerNormal, boneCount, scene):
+		if len(blenderMeshObject.data.polygons) == 0:
+			return ([], [])
+		
 		#
 		# Setup a modified version of the mesh data that can be fiddled with.
 		#
@@ -672,7 +675,10 @@ def exportModel(context, rootObjectName, exportSettings = None):
 		(vertices, faces) = exportMeshGeometry(blenderMeshObject, colorLayer, uvLayerColor, uvLayerNormal, len(boneGroupBones), scene)
 		
 		if len(vertices) == 0:
-			boundingBox = None
+			boundingBox = ModelFile.ModelFile.BoundingBox(
+				ModelFile.ModelFile.Vector3(0, 0, 0),
+				ModelFile.ModelFile.Vector3(0, 0, 0),
+			)
 		else:
 			boundingBox = ModelFile.ModelFile.BoundingBox(
 				ModelFile.ModelFile.Vector3(

@@ -782,14 +782,17 @@ def readModelBuffer(modelBuffer, parserSettings):
 			else:
 				unknownDataOffset = 0
 			
-			boneGroupArray = StructArray.parse(meshArray.streamFrom(boneGroupOffset), 4)
-			if len(boneGroupArray) == 0:
+			if boneGroupOffset == 0:
 				boneGroupAddress = None
-			elif len(boneGroupArray) == 1:
-				(relativeBoneGroupOffset, ) = unpack('< i', list(boneGroupArray.records())[0])
-				boneGroupAddress = meshArray.addressOf(relativeBoneGroupOffset)
 			else:
-				raise InvalidModel("Unexpected mesh bone group format")
+				boneGroupArray = StructArray.parse(meshArray.streamFrom(boneGroupOffset), 4)
+				if len(boneGroupArray) == 0:
+					boneGroupAddress = None
+				elif len(boneGroupArray) == 1:
+					(relativeBoneGroupOffset, ) = unpack('< i', list(boneGroupArray.records())[0])
+					boneGroupAddress = meshArray.addressOf(relativeBoneGroupOffset)
+				else:
+					raise InvalidModel("Unexpected mesh bone group format")
 			
 			meshName = None
 			extensionHeaders = set()
@@ -1276,13 +1279,11 @@ def writeModel(model):
 		return relativizeAddresses(annotationStringRecordOffsets, sectionOffset)
 	
 	def storeMesh(meshSection, meshSectionAddress, mesh, annotations, geometryAddresses, annotationStringAddresses, boneGroupAddresses, materialAddresses):
-		if mesh.boneGroup is None:
-			boneGroupRecordOffset = 0
-		else:
+		boneGroupArray = RecordArray(4)
+		if mesh.boneGroup is not None:
 			boneGroupOffset = boneGroupAddresses[mesh.boneGroup] - meshSectionAddress
-			boneGroupArray = RecordArray(4)
 			boneGroupArray.addRecord(pack('< i', boneGroupOffset))
-			boneGroupRecordOffset = meshSection.addBlob(boneGroupArray.encode())
+		boneGroupRecordOffset = meshSection.addBlob(boneGroupArray.encode())
 		
 		if len(annotations) == 0:
 			annotationsArrayOffset = 0
