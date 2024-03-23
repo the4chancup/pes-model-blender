@@ -633,6 +633,8 @@ def readModelBuffer(modelBuffer, parserSettings):
 		faces = []
 		for i in range(faceVertexCount // 3):
 			(index1, index2, index3) = unpack('< 3H', faceVertexStream.read(6))
+			if index1 == index2 or index1 == index3 or index2 == index3:
+				continue
 			faces.append(ModelFile.Face(
 				vertices[effectiveVertexIDs[index1]],
 				vertices[effectiveVertexIDs[index2]],
@@ -664,6 +666,8 @@ def readModelBuffer(modelBuffer, parserSettings):
 		faces = []
 		for i in range(faceVertexCount // 3):
 			(index1, index2, index3) = unpack('< 3H', faceVertexStream.read(6))
+			if index1 == index2 or index1 == index3 or index2 == index3:
+				continue
 			if index1 >= len(vertices) or index2 >= len(vertices) or index3 >= len(vertices):
 				if not parserSettings.strictParsing:
 					#
