@@ -2,7 +2,7 @@ import bpy
 import bpy.props
 import bpy_extras.io_utils
 
-from . import ModelFile, IO
+from . import ModelFile, IO, Skeleton
 
 
 
@@ -18,6 +18,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 	#mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
 	ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
 	lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)
+	skeleton_simplification = bpy.props.BoolProperty(name = "Import simplified skeletons if possible", default = True)
 	
 	import_label = "PES model (.model)"
 	
@@ -29,6 +30,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 		self.mesh_names = context.scene.pes_model_import_mesh_names
 		self.loop_preservation = context.scene.pes_model_import_loop_preservation
 		#self.mesh_splitting = context.scene.pes_model_import_mesh_splitting
+		self.skeleton_simplification = context.scene.pes_model_import_skeleton_simplification
 		self.ignore_parser_warnings = context.scene.pes_model_ignore_parser_warnings
 		self.lenient_parsing = context.scene.pes_model_lenient_parsing
 		return bpy_extras.io_utils.ImportHelper.invoke(self, context, event)
@@ -45,6 +47,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 		importSettings.enableMeshNames = self.mesh_names
 		importSettings.enableVertexLoopPreservation = self.loop_preservation
 		#importSettings.enableMeshSplitting = self.mesh_splitting
+		importSettings.enableSkeletonSimplification = self.skeleton_simplification
 		
 		try:
 			(modelFile, warnings) = ModelFile.readModelFile(filename, parserSettings)
@@ -151,6 +154,9 @@ class PES_Model_Scene_Panel_Model_Import_Settings(bpy.types.Menu):
 		#row = self.layout.row()
 		#row.prop(context.scene, 'pes_model_import_mesh_splitting')
 		#row.enabled = context.scene.pes_model_import_extensions_enabled
+		
+		row = self.layout.row()
+		row.prop(context.scene, 'pes_model_import_skeleton_simplification')
 		
 		self.layout.prop(context.scene, 'pes_model_ignore_parser_warnings')
 		
@@ -260,7 +266,7 @@ class PES_Model_Scene_Panel(bpy.types.Panel):
 			row.menu(PES_Model_Scene_Panel_Model_Export_Settings.__name__, icon = 'DOWNARROW_HLT', text = "")
 
 class PES_Model_Mesh_Panel(bpy.types.Panel):
-	bl_label = "PES model Mesh Settings"
+	bl_label = "PES .model Mesh Settings"
 	bl_space_type = "PROPERTIES"
 	bl_region_type = "WINDOW"
 	bl_context = "data"
@@ -277,6 +283,58 @@ class PES_Model_Mesh_Panel(bpy.types.Panel):
 
 
 
+def PES_Model_Armature_SkeletonType_get(armatureObject):
+	return 0 if armatureObject.data.pes_model_simplified_skeleton else 1
+
+def PES_Model_Armature_SkeletonType_set(armatureObject, value):
+	if value == 1:
+		if armatureObject.data.pes_model_simplified_skeleton:
+			Skeleton.convertSimplifiedSkeletonToReal(bpy.context, armatureObject)
+		armatureObject.data.pes_model_simplified_skeleton = False
+	else:
+		if not armatureObject.data.pes_model_simplified_skeleton:
+			Skeleton.convertRealSkeletonToSimplified(bpy.context, armatureObject)
+		armatureObject.data.pes_model_simplified_skeleton = True
+
+class PES_Model_Armature_StandardizePose(bpy.types.Operator):
+	"""Pose skeleton to standard PES T-pose"""
+	bl_idname = "pes_model.standardize_pose"
+	bl_label = "Pose skeleton to standard PES pose"
+	bl_options = {'REGISTER', 'UNDO'}
+	
+	@classmethod
+	def poll(cls, context):
+		return context.mode == 'OBJECT' and context.active_object is not None and context.active_object.type == 'ARMATURE'
+	
+	def execute(self, context):
+		if context.active_object.data.pes_model_simplified_skeleton:
+			Skeleton.reposeSimplifiedSkeletonToStandard(context, context.active_object)
+		else:
+			armatureObjectName = context.active_object.name
+			Skeleton.convertRealSkeletonToSimplified(context, bpy.data.objects[armatureObjectName], convertPose = False)
+			Skeleton.reposeSimplifiedSkeletonToStandard(context, bpy.data.objects[armatureObjectName])
+			Skeleton.convertSimplifiedSkeletonToReal(context, bpy.data.objects[armatureObjectName], convertPose = False)
+		return {'FINISHED'}
+
+class PES_Model_Armature_Panel(bpy.types.Panel):
+	bl_label = "PES .model Skeleton Settings"
+	bl_space_type = "PROPERTIES"
+	bl_region_type = "WINDOW"
+	bl_context = "data"
+	
+	@classmethod
+	def poll(cls, context):
+		return context.armature != None
+	
+	def draw(self, context):
+		armature = context.armature
+		
+		mainColumn = self.layout.column()
+		mainColumn.prop(context.object, 'pes_model_skeleton_type')
+		mainColumn.operator(PES_Model_Armature_StandardizePose.bl_idname, icon = 'ARMATURE_DATA')
+
+
+
 classes = [
 	PES_Model_Scene_Import,
 	PES_Model_Scene_Export_Object,
@@ -286,6 +344,8 @@ classes = [
 	PES_Model_Scene_Panel_Model_Select_Filename,
 	PES_Model_Scene_Panel,
 	PES_Model_Mesh_Panel,
+	PES_Model_Armature_StandardizePose,
+	PES_Model_Armature_Panel,
 ]
 
 
@@ -301,8 +361,19 @@ def register():
 	bpy.types.Scene.pes_model_import_mesh_names = bpy.props.BoolProperty(name = "Store mesh names", default = True)
 	bpy.types.Scene.pes_model_import_loop_preservation = bpy.props.BoolProperty(name = "Preserve split vertices", default = True)
 	#bpy.types.Scene.pes_model_import_mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
+	bpy.types.Scene.pes_model_import_skeleton_simplification = bpy.props.BoolProperty(name = "Import simplified skeletons if possible", default = True)
 	bpy.types.Scene.pes_model_ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
 	bpy.types.Scene.pes_model_lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)
+	
+	bpy.types.Object.pes_model_skeleton_type = bpy.props.EnumProperty(name = "Skeleton mode",
+		items = [
+			('simplified', 'Simplified', 'Simplified'),
+			('real', 'Real', 'Real'),
+		],
+		get = PES_Model_Armature_SkeletonType_get,
+		set = PES_Model_Armature_SkeletonType_set,
+		options = {'SKIP_SAVE'}
+	)
 	
 	for c in classes:
 		bpy.utils.register_class(c)

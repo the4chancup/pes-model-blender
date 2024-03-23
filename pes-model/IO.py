@@ -6,7 +6,7 @@ import os
 import os.path
 import re
 
-from . import ModelFile, ModelSplitVertexEncoding
+from . import ModelFile, ModelSplitVertexEncoding, PesSkeletonData, Skeleton
 
 import numpy
 
@@ -24,6 +24,7 @@ class ImportSettings:
 		self.enableMeshNames = True
 		self.enableVertexLoopPreservation = True
 		#self.enableMeshSplitting = True
+		self.enableSkeletonSimplification = True
 
 class ExportSettings:
 	def __init__(self):
@@ -44,94 +45,74 @@ def importModel(context, model, filename, importSettings = None):
 	UV_MAP_COLOR = 'UVMap'
 	UV_MAP_NORMALS = 'normal_map'
 	
-	def addBone(blenderArmature, bone, boneIDs, bonesByName):
+	def hasExtensionHeader(model, key, value = None):
+		if not importSettings.enableExtensions:
+			return False
+		
+		for extensionHeader in model.extensionHeaders:
+			if value is None:
+				if key.lower().strip() == extensionHeader.lower().strip():
+					return True
+			else:
+				parts = extensionHeader.split(":")
+				if (
+					len(parts) == 2
+					and parts[0].lower().strip() == key.lower().strip()
+					and parts[1].lower().strip() == value.lower().strip()
+				):
+					return True
+		return False
+	
+	def addBone(blenderArmature, bone, boneIDs, bonesByName, simplifySkeleton):
 		if bone in boneIDs:
 			return boneIDs[bone]
+		
+		if bone.name in PesSkeletonData.bones:
+			databaseBone = PesSkeletonData.bones[bone.name]
+		else:
+			databaseBone = None
+		
+		if databaseBone is not None:
+			parentName = databaseBone.renderParent
+			while parentName is not None and parentName not in bonesByName:
+				parentName = PesSkeletonData.bones[parentName].renderParent
+			if parentName is None:
+				parentBoneID = None
+			else:
+				parentBoneID = addBone(blenderArmature, bonesByName[parentName], boneIDs, bonesByName, simplifySkeleton)
+		else:
+			parentBoneID = None
 		
 		blenderEditBone = blenderArmature.edit_bones.new(bone.name)
 		boneID = blenderEditBone.name
 		boneIDs[bone] = boneID
 		
-		# TODO: Make two versions of this, one based on the bone matrix and one based on hardcoded skeleton data
+		matrixInverse = Skeleton.pesToNumpy(bone.matrix)
+		matrixPes = numpy.linalg.inv(matrixInverse)
+		matrixBlender = Skeleton.boneMatrixPesToBlender(matrixPes)
+		if databaseBone is None:
+			boneLength = 0.1
+		elif simplifySkeleton:
+			boneLength = Skeleton.databaseBoneLength(databaseBone)
+			matrixBlender = Skeleton.boneMatrixRealToSimplified(databaseBone, matrixBlender)
+		else:
+			boneLength = Skeleton.databaseBoneLength(databaseBone) * 0.8
 		
-		#
-		# bone.matrix is the matrix that transforms coordinates from model space to bone space.
-		# That is, it is the inverse of the matrix that blender uses to define the bone.
-		#
-		boneMatrix = numpy.array([
-			bone.matrix[0:4],
-			bone.matrix[4:8],
-			bone.matrix[8:12],
-			[0, 0, 0, 1],
-		])
-		inverse = numpy.linalg.inv(boneMatrix)
-		
-		#
-		# Convert to blender's coordinate system
-		#
-		pesToBlenderTransformation = numpy.array([
-			[1, 0, 0, 0],
-			[0, 0, -1, 0],
-			[0, 1, 0, 0],
-			[0, 0, 0, 1],
-		])
-		effectiveBoneMatrix = numpy.matmul(pesToBlenderTransformation, numpy.matmul(inverse, numpy.linalg.inv(pesToBlenderTransformation)))
-		
-		#
-		# We now have:
-		# column 0: vector along the direction of the bone
-		# column 1: binormal
-		# column 2: normal
-		# column 3: bone starting position
-		#
-		
-		length = 0.2
-		blenderEditBone.head = (effectiveBoneMatrix[0][3], effectiveBoneMatrix[1][3], effectiveBoneMatrix[2][3])
-		blenderEditBone.tail = (
-			effectiveBoneMatrix[0][3] + effectiveBoneMatrix[0][0] * length,
-			effectiveBoneMatrix[1][3] + effectiveBoneMatrix[1][0] * length,
-			effectiveBoneMatrix[2][3] + effectiveBoneMatrix[2][0] * length,
-		)
-		
-		#
-		# To set the normal and binormal, we need to modify the bone's roll, i.e. the angle of rotation along the
-		# bone vector. It should be set so that the blender bone normal lines up with the specified matrix's normal.
-		#
-		# I have no idea what the roll is relative to, i.e. what roll=0 specifies. So we set roll=0 first, compute
-		# the angle between the resulting blender's bone normal and the desired one, then set roll=-angle.
-		#
-		# The blender bone matrix has the bone vector in column 1 [y], and the normal in column 0 [x].
-		#
-		blenderEditBone.roll = 0
-		
-		#
-		# To compute the angle between the desired and found normals, first we compute the cosine using the dot
-		# product, which determines the angle up to sign. To find the sign, we compute the cross product, and
-		# dot product that against the bone vector; this is the sine of the angle. atan2() then gives the exact angle.
-		#
-		axis = tuple(effectiveBoneMatrix[i][0] for i in range(3))
-		desiredNormal = tuple(effectiveBoneMatrix[i][1] for i in range(3))
-		currentNormal = tuple(blenderEditBone.matrix[i][2] for i in range(3))
-		
-		normalDotProduct = sum(desiredNormal[i] * currentNormal[i] for i in range(3))
-		normalCrossProduct = (
-			desiredNormal[2] * currentNormal[1] - desiredNormal[1] * currentNormal[2],
-			desiredNormal[0] * currentNormal[2] - desiredNormal[2] * currentNormal[0],
-			desiredNormal[1] * currentNormal[0] - desiredNormal[0] * currentNormal[1],
-		)
-		sine = sum(axis[i] * normalCrossProduct[i] for i in range(3))
-		angle = math.atan2(sine, normalDotProduct)
-		
-		blenderEditBone.roll = angle
+		Skeleton.setBoneGeometry(blenderEditBone, matrixBlender, boneLength)
 		
 		blenderEditBone.use_connect = False
+		if parentBoneID is not None:
+			blenderEditBone.parent = blenderArmature.edit_bones[parentBoneID]
 		blenderEditBone.hide = False
 		
 		return boneID
 	
 	def importSkeleton(context, model):
+		simplifySkeleton = (not hasExtensionHeader(model, "skeleton-type", "real")) and importSettings.enableSkeletonSimplification
+		
 		blenderArmature = bpy.data.armatures.new("Skeleton")
 		blenderArmature.show_names = True
+		blenderArmature.pes_model_simplified_skeleton = simplifySkeleton
 		
 		blenderArmatureObject = bpy.data.objects.new("Skeleton", blenderArmature)
 		armatureObjectID = blenderArmatureObject.name
@@ -147,7 +128,9 @@ def importModel(context, model, filename, importSettings = None):
 		
 		boneIDs = {}
 		for bone in model.bones:
-			addBone(blenderArmature, bone, boneIDs, bonesByName)
+			addBone(blenderArmature, bone, boneIDs, bonesByName, simplifySkeleton)
+		
+		Skeleton.connectBoneParents(blenderArmature)
 		
 		bpy.ops.object.mode_set(context.copy(), mode = 'OBJECT')
 		
@@ -312,6 +295,8 @@ def importModel(context, model, filename, importSettings = None):
 	if context.mode != 'OBJECT':
 		bpy.ops.object.mode_set(context.copy(), mode = 'OBJECT')
 	
+	Skeleton.computeSimplifiedDatabaseBoneMatrices(context)
+	
 	
 	
 	if importSettings.enableExtensions and importSettings.enableVertexLoopPreservation:
@@ -377,54 +362,187 @@ def exportModel(context, rootObjectName, exportSettings = None):
 		
 		return ModelFile.ModelFile.Bone(bone.name, [v for row in inverseBoneMatrix for v in row][0:12])
 	
-	def exportUnknownBone(boneName):
-		raise ExportError('Found vertex group %s without corresponding bone' % boneName)
-	
-	def findBone(boneName, candidateArmatures):
-		for armature in candidateArmatures:
-			for blenderBone in armature.bones:
-				if blenderBone.name == boneName:
-					return blenderBone
-		return None
-	
-	def isHardcodedBone(boneName):
-		return False
-		# TODO: custom bone export setting
-		#return boneName in PesSkeletonData.bones
-	
-	def exportBones(blenderMeshObjects, blenderArmatureObjects):
-		blenderMeshLinkedArmatures = {}
-		blenderLinkedArmatures = []
+	def exportBones(blenderMeshObjects, blenderArmatureObjects, extensionHeaders):
+		#
+		# For each named vertex group in each of the listed meshes, find a suitable blender bone object to represent it;
+		# and check that this results in a consistent <=1 bone mapping per vertex group name.
+		# Doing this consistently is tricky, because:
+		# - different meshes may be linked to different armatures (common when transplanting objects from one model to the next),
+		#   which may define inconsistent bone geometries;
+		# - vertex groups may be named after a bone that does not exist in the linked armature, but does exist in the linked
+		#   armature of one of the other meshes. Or which exists in an armature object that is a sibling of one of the meshes.
+		# - meshes may be linked to more than one armature modifier.
+		# Try to find a consistent solution to the above issues, which does not require a set of equivalent bones with inconsistent
+		# geometries. If this is not possible, throw an error.
+		#
+		# Use the following approach:
+		# - For each mesh and vertex group, check if a bone for that vertex group exists in at least one linked armature for the mesh.
+		#   If so, create a (bone name, bone) match. If a bone with this name exists in multiple linked armatures for the same mesh,
+		#   check that these define identical geometries, and create a match; if not, error.
+		# - Check that there are no bones with identical names and different geometries in the matches made so far. If there are, error.
+		# - For all remaining meshes and vertex groups:
+		#   - check if a match exists for that bone name. If so, use that bone as a match.
+		#   - check if a bone exists with that name in any of the armatures for which a match was created in stage1. If multiple, check
+		#     for consistent geometries.
+		#   - check if a bone exists in any of the linked armatures for any of the meshes, or any of the sibling armatures. If multiple,
+		#     check for consistent geometries.
+		#   - if nothing is found in this way, look up the bone in the PesSkeletonData database. If found, use that.
+		#   - if this still doesn't find anything, assume it's a static bone, and use an identity bone matrix.
+		#
+		class BoneSource:
+			def __init__(self, meshObject, armatureObject, blenderBone, matrix, isSimplified):
+				self.meshObject = meshObject
+				self.armatureObject = armatureObject
+				self.blenderBone = blenderBone
+				self.matrix = matrix
+				self.isSimplified = isSimplified
+			
+			@staticmethod
+			def fromArmature(meshObject, armatureObject, name):
+				blenderBone = armatureObject.data.bones[name]
+				isSimplified = False
+				matrix = Skeleton.blenderToNumpy(blenderBone.matrix_local)
+				if armatureObject.data.pes_model_simplified_skeleton and name in PesSkeletonData.bones:
+					isSimplified = True
+					matrix = Skeleton.boneMatrixSimplifiedToReal(PesSkeletonData.bones[name], matrix)
+				matrix = Skeleton.boneMatrixBlenderToPes(matrix)
+				return BoneSource(meshObject, armatureObject, blenderBone, matrix, isSimplified)
+			
+			def isConsistentWith(self, other):
+				for i in range(4):
+					for j in range(4):
+						if abs(self.matrix[i][j] - other.matrix[i][j]) > 0.001:
+							return False
+				return True
+		
+		#
+		# Find bones in armatures linked to each mesh
+		#
+		linkedBoneSources = {}
 		for blenderMeshObject in blenderMeshObjects:
-			blenderMeshLinkedArmatures[blenderMeshObject] = []
-			for modifier in blenderMeshObject.modifiers:
-				if modifier.type == 'ARMATURE':
-					blenderArmature = modifier.object.data
-					blenderLinkedArmatures.append(blenderArmature)
-					blenderMeshLinkedArmatures[blenderMeshObject].append(blenderArmature)
+			linkedArmatureObjects = [modifier.object for modifier in blenderMeshObject.modifiers if modifier.type == 'ARMATURE']
+			vertexGroupNames = [vertexGroup.name for vertexGroup in blenderMeshObject.vertex_groups]
+			for name in vertexGroupNames:
+				sources = [
+					BoneSource.fromArmature(blenderMeshObject, armatureObject, name)
+					for armatureObject in linkedArmatureObjects
+					if name in armatureObject.data.bones
+				]
+				for source in sources[1:]:
+					if not sources[0].isConsistentWith(source):
+						raise ExportError("Mesh '%s' has conflicting bones '%s' in linked armatures '%s', '%s'" % (
+							blenderMeshObject.name,
+							name,
+							sources[0].armatureObject.name,
+							source.name,
+						))
+				if len(sources) > 0:
+					if name not in linkedBoneSources:
+						linkedBoneSources[name] = []
+					linkedBoneSources[name].append(sources[0])
+		
+		#
+		# Check consistency of bone sources found this way
+		#
+		for boneName, sources in linkedBoneSources.items():
+			for source in sources[1:]:
+				if not sources[0].isConsistentWith(source):
+					raise ExportError("Bone '%s' has conflicting definitions in mesh '%s' linked armature '%s', mesh '%s' linked armature '%s'" % (
+						boneName,
+						sources[0].meshObject.name,
+						sources[0].armatureObject.name,
+						source.meshObject.name,
+						source.armatureObject.name,
+					))
+		
+		#
+		# Try best-effort fallback options.
+		#
+		primaryCandidates = []
+		for sources in linkedBoneSources.values():
+			for source in sources:
+				if source.armatureObject.name not in [armatureObject.name for armatureObject in primaryCandidates]:
+					primaryCandidates.append(source.armatureObject)
+		secondaryCandidates = []
+		for armatureObject in [
+			modifier.object
+			for blenderMeshObject in blenderMeshObjects
+			for modifier in blenderMeshObject.modifiers
+			if modifier.type == 'ARMATURE'
+		] + blenderArmatureObjects:
+			if (
+				    armatureObject.name not in [armatureObject.name for armatureObject in primaryCandidates]
+				and armatureObject.name not in [armatureObject.name for armatureObject in secondaryCandidates]
+			):
+				secondaryCandidates.append(armatureObject)
+		
+		for blenderMeshObject in blenderMeshObjects:
+			vertexGroupNames = [vertexGroup.name for vertexGroup in blenderMeshObject.vertex_groups]
+			for name in vertexGroupNames:
+				if name in linkedBoneSources:
+					continue
+				
+				sources = [
+					BoneSource.fromArmature(blenderMeshObject, armatureObject, name)
+					for armatureObject in primaryCandidates
+					if name in armatureObject.data.bones
+				]
+				for source in sources[1:]:
+					if not sources[0].isConsistentWith(source):
+						raise ExportError("Mesh '%s' has conflicting bones '%s' in armatures '%s', '%s'" % (
+							blenderMeshObject.name,
+							name,
+							sources[0].armatureObject.name,
+							source.name,
+						))
+				if len(sources) > 0:
+					linkedBoneSources[name] = [sources[0]]
+					continue
+				
+				sources = [
+					BoneSource.fromArmature(blenderMeshObject, armatureObject, name)
+					for armatureObject in secondaryCandidates
+					if name in armatureObject.data.bones
+				]
+				for source in sources[1:]:
+					if not sources[0].isConsistentWith(source):
+						raise ExportError("Mesh '%s' has conflicting bones '%s' in armatures '%s', '%s'" % (
+							blenderMeshObject.name,
+							name,
+							sources[0].armatureObject.name,
+							source.name,
+						))
+				if len(sources) > 0:
+					linkedBoneSources[name] = [sources[0]]
+					continue
+				
+				if name in PesSkeletonData.bones:
+					linkedBoneSources[name] = [BoneSource(None, None, None, Skeleton.pesToNumpy(PesSkeletonData.bones[name].matrix), False)]
+				else:
+					identityMatrix = numpy.array([
+						[1, 0, 0, 0],
+						[0, 1, 0, 0],
+						[0, 0, 1, 0],
+						[0, 0, 0, 1],
+					])
+					linkedBoneSources[name] = [BoneSource(None, None, None, identityMatrix, False)]
 		
 		bones = []
 		boneIndices = {}
-		for blenderMeshObject in blenderMeshObjects:
-			boneNames = [vertexGroup.name for vertexGroup in blenderMeshObject.vertex_groups]
-			candidateArmatures = (
-				blenderMeshLinkedArmatures[blenderMeshObject] +
-				blenderLinkedArmatures +
-				[ armatureObject.data for armatureObject in blenderArmatureObjects ]
-			)
-			for boneName in boneNames:
-				if boneName not in boneIndices:
-					if isHardcodedBone(boneName):
-						bone = exportHardcodedBone(boneName)
-					else:
-						blenderBone = findBone(boneName, candidateArmatures)
-						if blenderBone is not None:
-							bone = exportBlenderBone(blenderBone)
-						else:
-							bone = exportUnknownBone(boneName)
-					
-					boneIndices[boneName] = len(bones)
-					bones.append(bone)
+		isSimplified = False
+		for name, sources in linkedBoneSources.items():
+			matrix = numpy.linalg.inv(sources[0].matrix)
+			bone = ModelFile.ModelFile.Bone(name, [v for row in matrix for v in row][0:12])
+			boneIndices[name] = len(bones)
+			bones.append(bone)
+			if sources[0].isSimplified:
+				isSimplified = True
+		
+		if exportSettings.enableExtensions:
+			if isSimplified:
+				extensionHeaders.add('Skeleton-Type: Simplified')
+			else:
+				extensionHeaders.add('Skeleton-Type: Real')
 		
 		return (bones, boneIndices)
 	
@@ -747,13 +865,17 @@ def exportModel(context, rootObjectName, exportSettings = None):
 	if context.mode != 'OBJECT':
 		bpy.ops.object.mode_set(context.copy(), mode = 'OBJECT')
 	
+	Skeleton.computeSimplifiedDatabaseBoneMatrices(context)
 	
+	
+	
+	extensionHeaders = set()
 	
 	(blenderMeshObjects, blenderArmatureObjects) = listMeshObjects(context, rootObjectName)
 	
 	materials = exportMaterials(blenderMeshObjects)
 	
-	(bones, boneIndices) = exportBones(blenderMeshObjects, blenderArmatureObjects)
+	(bones, boneIndices) = exportBones(blenderMeshObjects, blenderArmatureObjects, extensionHeaders)
 	
 	meshes = []
 	meshNames = {}
@@ -769,6 +891,7 @@ def exportModel(context, rootObjectName, exportSettings = None):
 	model.materials = materials
 	model.meshes = meshes
 	model.boundingBox = boundingBox
+	model.extensionHeaders = extensionHeaders
 	
 	if exportSettings.enableExtensions and exportSettings.enableVertexLoopPreservation:
 		model = ModelSplitVertexEncoding.encodeModelVertexLoopPreservation(model)

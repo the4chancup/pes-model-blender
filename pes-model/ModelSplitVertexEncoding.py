@@ -177,6 +177,7 @@ def encodeModelVertexLoopPreservation(model):
 	output.materials = model.materials
 	output.boundingBox = model.boundingBox
 	output.meshes = [encodeMeshVertexLoopPreservation(mesh) for mesh in model.meshes]
+	output.extensionHeaders = model.extensionHeaders
 	return output
 
 
@@ -245,4 +246,5 @@ def decodeModelVertexLoopPreservation(model):
 	output.materials = model.materials
 	output.boundingBox = model.boundingBox
 	output.meshes = [decodeMeshVertexLoopPreservation(mesh) for mesh in model.meshes]
+	output.extensionHeaders = model.extensionHeaders
 	return output
