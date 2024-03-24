@@ -15,7 +15,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 	extensions_enabled = bpy.props.BoolProperty(name = "Enable blender-pes-model extensions", default = True)
 	mesh_names = bpy.props.BoolProperty(name = "Store mesh names", default = True)
 	loop_preservation = bpy.props.BoolProperty(name = "Preserve split vertices", default = True)
-	#mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
+	mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
 	ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
 	lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)
 	skeleton_simplification = bpy.props.BoolProperty(name = "Import simplified skeletons if possible", default = True)
@@ -29,7 +29,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 		self.extensions_enabled = context.scene.pes_model_import_extensions_enabled
 		self.mesh_names = context.scene.pes_model_import_mesh_names
 		self.loop_preservation = context.scene.pes_model_import_loop_preservation
-		#self.mesh_splitting = context.scene.pes_model_import_mesh_splitting
+		self.mesh_splitting = context.scene.pes_model_import_mesh_splitting
 		self.skeleton_simplification = context.scene.pes_model_import_skeleton_simplification
 		self.ignore_parser_warnings = context.scene.pes_model_ignore_parser_warnings
 		self.lenient_parsing = context.scene.pes_model_lenient_parsing
@@ -46,7 +46,7 @@ class PES_Model_Scene_Import(bpy.types.Operator, bpy_extras.io_utils.ImportHelpe
 		importSettings.enableExtensions = self.extensions_enabled
 		importSettings.enableMeshNames = self.mesh_names
 		importSettings.enableVertexLoopPreservation = self.loop_preservation
-		#importSettings.enableMeshSplitting = self.mesh_splitting
+		importSettings.enableMeshSplitting = self.mesh_splitting
 		importSettings.enableSkeletonSimplification = self.skeleton_simplification
 		
 		try:
@@ -91,7 +91,7 @@ class PES_Model_Scene_Export_Object(bpy.types.Operator, bpy_extras.io_utils.Expo
 	extensions_enabled = bpy.props.BoolProperty(name = "Enable blender-pes-model extensions", default = True)
 	mesh_names = bpy.props.BoolProperty(name = "Store mesh names", default = True)
 	loop_preservation = bpy.props.BoolProperty(name = "Preserve split vertices", default = True)
-	#mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
+	mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
 	
 	export_label = "PES model (.model)"
 	
@@ -107,7 +107,7 @@ class PES_Model_Scene_Export_Object(bpy.types.Operator, bpy_extras.io_utils.Expo
 		self.extensions_enabled = context.active_object.pes_model_export_extensions_enabled
 		self.mesh_names = context.active_object.pes_model_export_mesh_names
 		self.loop_preservation = context.active_object.pes_model_export_loop_preservation
-		#self.mesh_splitting = context.active_object.pes_model_export_mesh_splitting
+		self.mesh_splitting = context.active_object.pes_model_export_mesh_splitting
 		if context.active_object.pes_model_filename != "":
 			self.filepath = context.active_object.pes_model_filename
 		return bpy_extras.io_utils.ExportHelper.invoke(self, context, event)
@@ -117,7 +117,7 @@ class PES_Model_Scene_Export_Object(bpy.types.Operator, bpy_extras.io_utils.Expo
 		exportSettings.enableExtensions = self.extensions_enabled
 		exportSettings.enableMeshNames = self.mesh_names
 		exportSettings.enableVertexLoopPreservation = self.loop_preservation
-		#exportSettings.enableMeshSplitting = self.mesh_splitting
+		exportSettings.enableMeshSplitting = self.mesh_splitting
 		
 		try:
 			modelFile = IO.exportModel(context, self.objectName, exportSettings)
@@ -151,9 +151,9 @@ class PES_Model_Scene_Panel_Model_Import_Settings(bpy.types.Menu):
 		row.prop(context.scene, 'pes_model_import_loop_preservation')
 		row.enabled = context.scene.pes_model_import_extensions_enabled
 		
-		#row = self.layout.row()
-		#row.prop(context.scene, 'pes_model_import_mesh_splitting')
-		#row.enabled = context.scene.pes_model_import_extensions_enabled
+		row = self.layout.row()
+		row.prop(context.scene, 'pes_model_import_mesh_splitting')
+		row.enabled = context.scene.pes_model_import_extensions_enabled
 		
 		row = self.layout.row()
 		row.prop(context.scene, 'pes_model_import_skeleton_simplification')
@@ -186,9 +186,9 @@ class PES_Model_Scene_Panel_Model_Export_Settings(bpy.types.Menu):
 		row = self.layout.row()
 		row.prop(context.active_object, 'pes_model_export_loop_preservation')
 		row.enabled = context.active_object.pes_model_export_extensions_enabled
-		#row = self.layout.row()
-		#row.prop(context.active_object, 'pes_model_export_mesh_splitting')
-		#row.enabled = context.active_object.pes_model_export_extensions_enabled
+		row = self.layout.row()
+		row.prop(context.active_object, 'pes_model_export_mesh_splitting')
+		row.enabled = context.active_object.pes_model_export_extensions_enabled
 
 class PES_Model_Scene_Panel_Model_Select_Filename(bpy.types.Operator):
 	"""Select a filename to export this .model file"""
@@ -259,7 +259,7 @@ class PES_Model_Scene_Panel(bpy.types.Panel):
 			exportSettings.extensions_enabled = object.pes_model_export_extensions_enabled
 			exportSettings.mesh_names = object.pes_model_export_mesh_names
 			exportSettings.loop_preservation = object.pes_model_export_loop_preservation
-			#exportSettings.mesh_splitting = object.pes_model_export_mesh_splitting
+			exportSettings.mesh_splitting = object.pes_model_export_mesh_splitting
 			if object.pes_model_filename == "":
 				subrow.enabled = False
 			#row.operator(PES_Model_Scene_Export_Object_Summary.bl_idname, text = "", icon = 'INFO').objectName = object.name
@@ -356,11 +356,11 @@ def register():
 	bpy.types.Object.pes_model_export_extensions_enabled = bpy.props.BoolProperty(name = "Enable blender-pes-model extensions", default = True)
 	bpy.types.Object.pes_model_export_mesh_names = bpy.props.BoolProperty(name = "Store mesh names", default = True)
 	bpy.types.Object.pes_model_export_loop_preservation = bpy.props.BoolProperty(name = "Preserve split vertices", default = True)
-	#bpy.types.Object.pes_model_export_mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
+	bpy.types.Object.pes_model_export_mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
 	bpy.types.Scene.pes_model_import_extensions_enabled = bpy.props.BoolProperty(name = "Enable blender-pes-model extensions", default = True)
 	bpy.types.Scene.pes_model_import_mesh_names = bpy.props.BoolProperty(name = "Store mesh names", default = True)
 	bpy.types.Scene.pes_model_import_loop_preservation = bpy.props.BoolProperty(name = "Preserve split vertices", default = True)
-	#bpy.types.Scene.pes_model_import_mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
+	bpy.types.Scene.pes_model_import_mesh_splitting = bpy.props.BoolProperty(name = "Autosplit overlarge meshes", default = True)
 	bpy.types.Scene.pes_model_import_skeleton_simplification = bpy.props.BoolProperty(name = "Import simplified skeletons if possible", default = True)
 	bpy.types.Scene.pes_model_ignore_parser_warnings = bpy.props.BoolProperty(name = "Ignore parser warnings", default = False)
 	bpy.types.Scene.pes_model_lenient_parsing = bpy.props.BoolProperty(name = "Fix corruptions where possible", default = True)

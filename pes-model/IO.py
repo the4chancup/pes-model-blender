@@ -6,7 +6,7 @@ import os
 import os.path
 import re
 
-from . import ModelFile, ModelSplitVertexEncoding, PesSkeletonData, Skeleton
+from . import ModelFile, ModelMeshSplitting, ModelSplitVertexEncoding, PesSkeletonData, Skeleton
 
 import numpy
 
@@ -23,7 +23,7 @@ class ImportSettings:
 		self.enableExtensions = True
 		self.enableMeshNames = True
 		self.enableVertexLoopPreservation = True
-		#self.enableMeshSplitting = True
+		self.enableMeshSplitting = True
 		self.enableSkeletonSimplification = True
 
 class ExportSettings:
@@ -31,7 +31,7 @@ class ExportSettings:
 		self.enableExtensions = True
 		self.enableMeshNames = True
 		self.enableVertexLoopPreservation = True
-		#self.enableMeshSplitting = True
+		self.enableMeshSplitting = True
 
 
 
@@ -299,6 +299,8 @@ def importModel(context, model, filename, importSettings = None):
 	
 	
 	
+	if importSettings.enableExtensions and importSettings.enableMeshSplitting:
+		model = ModelMeshSplitting.decodeModelSplitMeshes(model)
 	if importSettings.enableExtensions and importSettings.enableVertexLoopPreservation:
 		model = ModelSplitVertexEncoding.decodeModelVertexLoopPreservation(model)
 	
@@ -895,6 +897,8 @@ def exportModel(context, rootObjectName, exportSettings = None):
 	
 	if exportSettings.enableExtensions and exportSettings.enableVertexLoopPreservation:
 		model = ModelSplitVertexEncoding.encodeModelVertexLoopPreservation(model)
+	if exportSettings.enableExtensions and exportSettings.enableMeshSplitting:
+		model = ModelMeshSplitting.encodeModelSplitMeshes(model)
 	
 	errors = []
 	for mesh in model.meshes:

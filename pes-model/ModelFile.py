@@ -955,6 +955,31 @@ def readModelFile(filename, parserSettings):
 
 
 
+def encodeBoneMapping(boneMapping):
+	#
+	# .model bone mappings support at most 4 bones. If a vertex has more than four bones in its bone mapping,
+	# cut it down to the four bones with the most weight; redistribute all weight omitted this way along the
+	# remaining four bones, proportional to their original weight.
+	#
+	
+	orderedBones = sorted(boneMapping.items(), key = (lambda pair: (pair[1], pair[0])), reverse = True)
+	totalWeight = sum([weight for (boneIndex, weight) in orderedBones])
+	selectedBones = orderedBones[0:4]
+	selectedWeight = sum([weight for (boneIndex, weight) in selectedBones])
+	missingWeight = totalWeight - selectedWeight
+	
+	if missingWeight > 0:
+		effectiveMapping = [(boneIndex, weight + (missingWeight * (weight / selectedWeight))) for (boneIndex, weight) in selectedBones]
+	else:
+		effectiveMapping = selectedBones
+	
+	if len(effectiveMapping) < 4:
+		effectiveMapping += [(0, 0.0)] * (4 - len(effectiveMapping))
+	
+	boneIndices = pack('< 4B', *(boneIndex for (boneIndex, weight) in effectiveMapping))
+	boneWeights = pack('< 4f', *(weight for (boneIndex, weight) in effectiveMapping))
+	return (boneIndices, boneWeights)
+
 def encodeVertices(mesh):
 	if mesh.vertexEncodings is not None:
 		return
@@ -988,28 +1013,7 @@ def encodeVertices(mesh):
 	
 	if mesh.vertexFields.hasBoneMapping:
 		for (vertex, encoding) in zip(mesh.vertices, mesh.vertexEncodings):
-			#
-			# .model bone mappings support at most 4 bones. If a vertex has more than four bones in its bone mapping,
-			# cut it down to the four bones with the most weight; redistribute all weight omitted this way along the
-			# remaining four bones, proportional to their original weight.
-			#
-			
-			orderedBones = sorted(vertex.boneMapping.items(), key = (lambda pair: (pair[1], pair[0])), reverse = True)
-			totalWeight = sum([weight for (boneIndex, weight) in orderedBones])
-			selectedBones = orderedBones[0:4]
-			selectedWeight = sum([weight for (boneIndex, weight) in selectedBones])
-			missingWeight = totalWeight - selectedWeight
-			
-			if missingWeight > 0:
-				effectiveMapping = [(boneIndex, weight + (missingWeight * (weight / selectedWeight))) for (boneIndex, weight) in selectedBones]
-			else:
-				effectiveMapping = selectedBones
-			
-			if len(effectiveMapping) < 4:
-				effectiveMapping += [(0, 0.0)] * (4 - len(effectiveMapping))
-			
-			encoding.boneIndices = pack('< 4B', *(boneIndex for (boneIndex, weight) in effectiveMapping))
-			encoding.boneWeights = pack('< 4f', *(weight for (boneIndex, weight) in effectiveMapping))
+			encoding.boneIndices, encoding.boneWeights = encodeBoneMapping(vertex.boneMapping)
 
 def writeModel(model):
 	def pad(blob, size):

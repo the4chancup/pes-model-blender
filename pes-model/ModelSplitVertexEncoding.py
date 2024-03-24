@@ -88,7 +88,7 @@ def nontopologicalEncoding(encodedVertex, vertexFields):
 	if vertexFields.hasTangent:
 		encoding += encodedVertex.tangent
 	if vertexFields.hasBitangent:
-		encoding += encodedVertex.tangent
+		encoding += encodedVertex.bitangent
 	return bytes(encoding)
 
 def replaceFaceVertices(faces, replacedVertices):
