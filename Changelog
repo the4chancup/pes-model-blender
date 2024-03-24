@@ -1,13 +1,23 @@
+0.3.0  2024-03-24
+
+	* Add support for manipulating skeletons in the same format at pes-fmdl.
+	* Add functionality transforming models with bones in nonstandard locations to the standard PES T-pose.
+	* Implemented mesh splitting.
+	* Fixed various bugs exporting boneless models.
+
 0.2.3  2024-03-06
+
 	* Implemented vertex-loop preservation.
 	* Fixed a bug importing bone roll.
 	* Fixed a bug exporting meshes without any polygons in it.
 	* Fixed exporting static-weighted meshes.
 
 0.2.2  2024-03-05
+
 	* Fixed one more python 3.5 bug.
 
 0.2.1  2024-03-04
+
 	* Add support for mesh names.
 	* Add support for python 3.5, which is bundled with blender 2.79b for windows.
 
