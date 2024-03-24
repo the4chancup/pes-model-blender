@@ -903,11 +903,11 @@ def exportModel(context, rootObjectName, exportSettings = None):
 	errors = []
 	for mesh in model.meshes:
 		if len(mesh.vertices) > 65535:
-			errors.append("Mesh '%s' contains %s vertices out of a maximum of 65535" % (meshNames[mesh], len(mesh.vertices)))
-		#if len(mesh.faces) > 21845:
-		#	errors.append("Mesh '%s' contains %s faces out of a maximum of 21845" % (meshNames[mesh], len(mesh.faces)))
-		#if mesh.boneGroup is not None and len(mesh.boneGroup.bones) > 32:
-		#	errors.append("Mesh '%s' bone group contains %s bones out of a maximum of 32" % (meshNames[mesh], len(mesh.boneGroup.bones)))
+			errors.append("Mesh '%s' contains %s vertices out of a maximum of 65535" % (mesh.name, len(mesh.vertices)))
+		if len(mesh.faces) > 21845:
+			errors.append("Mesh '%s' contains %s faces out of a maximum of 21845" % (mesh.name, len(mesh.faces)))
+		if mesh.boneGroup is not None and len(mesh.boneGroup.bones) > 64:
+			errors.append("Mesh '%s' bone group contains %s bones out of a maximum of 32" % (mesh.name, len(mesh.boneGroup.bones)))
 	if len(errors) > 0:
 		raise ExportError(errors)
 	
